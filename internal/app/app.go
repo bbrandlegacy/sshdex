@@ -18,7 +18,7 @@ import (
 	"github.com/bbrandlegacy/sshdex/internal/store"
 )
 
-const Version = "0.1.0-dev"
+const Version = "0.1.0"
 
 type options struct {
 	storePath string
