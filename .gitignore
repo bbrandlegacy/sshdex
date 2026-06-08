@@ -1,0 +1,23 @@
+# Build artifacts
+/sshdex
+/bin/
+/dist/
+/tmp/
+
+# Local sshdex stores / smoke files
+profiles.json
+*.sshdex
+
+# Local BMAD / agent workflow state (kept on disk, not public release tree)
+.agents/
+_bmad/
+_bmad-output/
+docs/ABUN_ENGINEERING_HANDOFF.md
+
+# OS/editor
+.DS_Store
+*.swp
+
+# Coverage/test output
+coverage.out
+*.coverprofile

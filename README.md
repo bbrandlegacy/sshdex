@@ -1,222 +1,195 @@
-# Research: sshdex — SSH Connection Manager CLI/TUI
+# sshdex
 
-**Date:** 2026-06-08
-**Status:** BMAD-ready product brief input
-**Category:** Developer Tool / DevOps
+sshdex is a local-first SSH profile manager: an RDP-style command-line index for saving, browsing, editing, importing, and launching SSH targets without memorizing aliases or rebuilding `ssh` flags by hand.
 
----
+v0.1 is intentionally conservative. It stores SSH profile metadata and key file paths only. It does not store passwords, passphrases, or private key contents.
 
-## Problem
+## Status
 
-Every developer manages SSH connections. The workflow today is terrible:
-- Memorize or grep `~/.ssh/config` for hostnames
-- Google the right flags every time (`-i`, `-L`, `-J` for jump hosts)
-- Passwords stored nowhere or insecurely in plaintext scripts
-- No way to group/label connections (personal, work, client A, client B)
-- SSH config has no UX — it's a flat text file with cryptic syntax
-- Windows RDP app does this RIGHT (saved profiles, one-click connect, visual list) — SSH has no equivalent
-- Switching between machines means re-copying SSH config manually
+v0.1 is implemented and locally validated.
 
----
+Implemented v0.1 capabilities:
 
-## Existing Competition
+- Go single-binary CLI skeleton.
+- Validated SSH profile model.
+- Local JSON profile store.
+- Deterministic OpenSSH argv generation.
+- Safe shell-quoted dry-run preview.
+- CLI CRUD: `add`, `list`, `show`, `edit`, `delete`.
+- Connect by name: `connect NAME --dry-run` and shorthand `sshdex NAME --dry-run`.
+- `doctor` diagnostics.
+- Import from OpenSSH config: `import PATH [--dry-run]`.
 
-### sshs
-- **Language:** Go
-- **GitHub:** quantumsheep/sshs
-- **Stars:** ~2,000+
-- **Features:** TUI browser over `~/.ssh/config`, fuzzy search, keyboard navigation, launches SSH from selection
-- **Limitations:** Read-only of existing config — no add/edit/delete from TUI, no password storage, no grouping/tags, no cross-machine sync, no encrypted credential store
-- **Status:** Active, but narrow scope
+## Install / build from source
 
-### Storm (stormssh)
-- **Language:** Python
-- **GitHub:** emre/storm
-- **Stars:** ~4,000
-- **Features:** Add/delete/edit SSH hosts from CLI (`storm add`, `storm delete`), list hosts, search
-- **Limitations:** Python dependency, no TUI, no encryption, no password storage, no UI to browse/select, CLI-only management
-- **Status:** Moderately active, older project
-
-### assh (Advanced SSH config)
-- **Language:** Go
-- **GitHub:** moul/assh
-- **Stars:** ~3,000
-- **Features:** SSH config manager with includes, templates, hooks, ProxyJump generation, Kubernetes integration
-- **Limitations:** Config management only — no TUI, no credential storage, no interactive connection browser, power-user only
-- **Status:** Active
-
-### Shuttle (Mac app)
-- **Language:** Swift (macOS only)
-- **Type:** macOS menu bar app
-- **Features:** SSH shortcuts from menu bar, simple profile storage
-- **Limitations:** macOS only, GUI not CLI, no encryption, no cross-platform
-- **Status:** Maintained
-
-### sshwifty
-- **Language:** Go
-- **Type:** Web-based SSH client
-- **Features:** SSH in browser, self-hosted
-- **Limitations:** Requires running server, not a CLI tool
-- **Status:** Active
-
-### Teleport
-- **Language:** Go
-- **Type:** Enterprise access platform
-- **Features:** Certificate-based auth, audit logs, team access controls
-- **Limitations:** Enterprise product, heavyweight, requires infrastructure, overkill for personal use
-- **Pricing:** Paid for enterprise features
-
-### tmux + SSH scripts
-- Common pattern: shell scripts or tmux sessionizer that wraps SSH
-- No encryption, no UX, personal scripts only
-
----
-
-## Feature Gap Matrix
-
-| Feature | sshs | Storm | assh | sshdex (proposed) |
-|---------|------|-------|------|---------------------|
-| TUI browser | Yes | No | No | Yes |
-| Add/edit hosts | No | Yes (CLI) | Yes (CLI) | Yes (TUI) |
-| Encrypted password store | No | No | No | Yes (age) |
-| Grouping / tags | No | No | No | Yes |
-| Jump host management | No | Partial | Yes | Yes |
-| Port forwarding profiles | No | No | Partial | Yes |
-| Cross-machine sync | No | No | No | Yes (encrypted export) |
-| Windows support | No | No | Partial | Yes |
-| Terminal customization on connect | No | No | No | Yes |
-| Key file management | No | No | No | Yes |
-
----
-
-## Proposed Tool: `sshdex`
-
-### Core Vision
-Windows RDP-style profile manager for SSH. Pick your machine from a beautiful TUI list, connect. Secrets encrypted locally. Single Go binary, works on macOS/Linux/Windows.
-
-### Key Features
-
-**Core (v0.1)**
-- `sshdex add` — wizard to add SSH profile (host, user, port, key file, password optional)
-- `sshdex list` — TUI browser: scroll through profiles, fuzzy search, group by tag
-- `sshdex connect <name>` — connect by name without remembering IP/user
-- `sshdex <name>` — shorthand connect
-- Profile storage: encrypted JSON vault using `age`
-- Groups/tags: organize by project, client, environment
-- Import from `~/.ssh/config` — auto-migrate existing setup
-
-**TUI (v0.2)**
-- RDP-style visual profile picker (your PlexLinker tcell skills apply directly)
-- Search bar at top — fuzzy filter as you type
-- Profile detail panel: shows host, user, port, last connected, tags
-- Quick actions: connect, edit, delete, copy SSH command
-- Status indicators: last connected timestamp, connection count
-- Keyboard shortcuts (hjkl / arrow keys)
-- Recent connections list
-
-**Security (v0.2)**
-- Passwords encrypted at rest with `age`
-- Vault unlock: passphrase or key file
-- Optional: no password storage (key-only auth)
-- `sshdex lock` — clear decrypted state from memory
-
-**Advanced (v0.3)**
-- **Port forwarding profiles** — save tunnel configs, launch with one key (`-L 5432:localhost:5432`)
-- **Jump host chains** — define ProxyJump sequences visually
-- **Terminal customization on connect** — send init string after connecting (set PS1, run tmux, run `screen`, source profile)
-- **SSH key management** — list keys, associate key per profile, generate new key
-- **Connection scripts** — run local script before/after connect (set env, open browser, etc.)
-- **Multi-hop sessions** — visual chain builder for bastion → target patterns
-
-**Sync (v1.0)**
-- `sshdex export` — encrypted bundle for cross-machine sync
-- `sshdex import bundle.sshdex` — import on new machine
-- Git-backed sync (optional, encrypted)
-- 1Password / Bitwarden export
-
-**AI Integration**
-- `sshdex mcp` — MCP server exposing `sshdex_connect`, `sshdex_list` tools
-- AI agent can SSH into a machine and run commands without seeing credentials
-- Same pattern as envctl's secure exec proxy
-
----
-
-## Terminal Customization Feature (Key Differentiator)
-
-No existing tool does this. When connecting, `sshdex` can:
-
-```yaml
-profile: prod-web-01
-host: 192.168.1.10
-user: deploy
-init_commands:
-  - "export PS1='[PROD] \u@\h:\w\$ '"
-  - "tmux new-session -A -s main"
-  - "cd /var/www/app"
-startup_message: "⚠️  PRODUCTION SERVER"
+```bash
+go build -o sshdex ./cmd/sshdex
+./sshdex version
 ```
 
-Injected via SSH pseudo-terminal after connect. Dev sees custom prompt, right directory, tmux session — automatically.
+For local smoke testing without touching your real profile store:
 
----
+```bash
+STORE=/tmp/sshdex-demo/profiles.json
+mkdir -p /tmp/sshdex-demo
+go build -o /tmp/sshdex-demo/sshdex ./cmd/sshdex
+/tmp/sshdex-demo/sshdex --store "$STORE" doctor
+```
 
-## Platform Notes
+## Commands
 
-### macOS
-- `age` encryption, keychain integration optional
-- Launch via Terminal / iTerm2
-- `brew install` distribution
+### Add a profile
 
-### Linux
-- GNOME Keyring / KWallet integration optional
-- Works in any terminal
-- `apt`/`yum` packages + `go install`
+```bash
+sshdex add \
+  --name prod-web-01 \
+  --host 203.0.113.10 \
+  --user deploy \
+  --port 22 \
+  --identity-file ~/.ssh/id_ed25519 \
+  --tag prod \
+  --tag web \
+  --notes "main production web host"
+```
 
-### Windows
-- Windows Credential Manager integration optional
-- PowerShell / Windows Terminal support
-- OpenSSH for Windows (built-in since Win10)
-- `.exe` single binary via `go install` or installer
+### List profiles
 
----
+```bash
+sshdex list
+sshdex list --tag prod
+sshdex list --search web
+```
 
-## Target Users
-- Developers managing 5+ servers (everyone loses count)
-- DevOps engineers with dozens of client/environment hosts
-- Freelancers with per-client server access
-- Homelab enthusiasts (Raspberry Pi clusters, NAS boxes, VMs)
-- Teams that need to share server access securely
+### Show a profile
 
----
+```bash
+sshdex show prod-web-01
+```
 
-## Monetization Path
-- Free / MIT core
-- Pro: encrypted sync, team profiles, audit log, 1Password integration — $4/mo
-- Team: shared encrypted vault, read-only profiles for junior devs — $6/user/mo
+### Edit a profile
 
----
+```bash
+sshdex edit prod-web-01 --host 203.0.113.11 --tag prod --tag web
+```
 
-## Build Order
-1. Profile CRUD + connect command (no TUI) — Week 1
-2. `age` encrypted vault — Week 1
-3. TUI browser (tcell, your existing skills) — Week 2
-4. Import from `~/.ssh/config` — Week 2
-5. Port forwarding profiles — Week 3
-6. Terminal init commands — Week 3
-7. Export/import bundle — Week 4
+### Delete a profile
 
----
+```bash
+sshdex delete prod-web-01 --force
+```
 
-## Resume / Portfolio Signal
-- Encryption (age)
-- TUI (complex multi-pane)
-- Process management (SSH subprocess, PTY handling)
-- Cross-platform (Windows SSH quirks are non-trivial)
-- Security thinking (credential storage, vault design)
+`--force` is required in v0.1 to avoid accidental deletes in non-interactive mode.
 
----
+### Connect / dry run
 
-## Risks
-- PTY/pseudo-terminal handling is non-trivial on Windows — `golang.org/x/crypto/ssh` helps
-- Password storage is security-sensitive — must be done right or skip it (key-only auth first)
-- **Mitigation:** v0.1 supports key-file auth only, no password storage; add encrypted passwords in v0.2 after vault design is solid
+Dry-run prints the OpenSSH command preview without launching SSH:
+
+```bash
+sshdex connect prod-web-01 --dry-run
+sshdex prod-web-01 --dry-run
+```
+
+Non-dry-run launches the system `ssh` binary with argv arguments, not a shell-concatenated string.
+
+```bash
+sshdex connect prod-web-01
+sshdex prod-web-01
+```
+
+### Import from SSH config
+
+Preview importable entries:
+
+```bash
+sshdex import ~/.ssh/config --dry-run
+```
+
+Import entries:
+
+```bash
+sshdex import ~/.ssh/config
+```
+
+Import reads the source SSH config and never overwrites it. Duplicate profile names are skipped.
+
+Supported imported directives in v0.1:
+
+- `Host`
+- `HostName`
+- `User`
+- `Port`
+- `IdentityFile`
+- `ProxyJump`
+
+Wildcard host blocks like `Host *` are skipped.
+
+### Doctor
+
+```bash
+sshdex doctor
+```
+
+Reports profile store path, profile count, whether `ssh` is available, and obvious invalid profile references such as missing identity files.
+
+### Test-only store override
+
+All commands accept a global store override:
+
+```bash
+sshdex --store /tmp/sshdex/profiles.json list
+```
+
+## Security posture
+
+sshdex v0.1 follows a conservative local-first security posture:
+
+- Does not store passwords.
+- Does not store passphrases.
+- Does not copy private key contents into the profile store.
+- Stores only metadata and key file paths.
+- Uses argv execution for OpenSSH rather than shell command strings.
+- Provides dry-run previews that quote shell-special arguments for readability.
+- Does not mutate `~/.ssh/config` during import.
+
+The research/architecture work behind this release treats SSH key management as a high-value security boundary. Password vaults, encrypted sync, team sharing, and MCP/AI agent access are deliberately deferred until separate threat modeling and tests exist.
+
+## v0.1 limits / deferred features
+
+Deferred beyond v0.1:
+
+- Password storage.
+- age-encrypted credential vault.
+- Team sharing.
+- Git-backed sync.
+- MCP server.
+- 1Password/Bitwarden integration.
+- Rich TUI profile picker.
+- Visual jump-host/tunnel builder.
+- Terminal init command automation.
+- Production Windows installer.
+
+## Development validation
+
+Use the release validation ladder:
+
+```bash
+go test ./...
+go vet ./...
+go test -race ./...
+go test -cover ./...
+go build -o /tmp/sshdex-preprod/sshdex ./cmd/sshdex
+git diff --check
+test -z "$(gofmt -l cmd internal)"
+```
+
+Optional smoke test:
+
+```bash
+STORE=/tmp/sshdex-smoke/profiles.json
+BIN=/tmp/sshdex-preprod/sshdex
+mkdir -p /tmp/sshdex-smoke
+$BIN --store "$STORE" add --name demo --host example.com --user deploy --tag demo
+$BIN --store "$STORE" list --search demo
+$BIN --store "$STORE" demo --dry-run
+$BIN --store "$STORE" doctor
+```
