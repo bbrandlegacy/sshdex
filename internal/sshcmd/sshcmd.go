@@ -22,11 +22,23 @@ func BuildArgs(p profile.Profile) ([]string, error) {
 	if normalized.ProxyJump != "" {
 		args = append(args, "-J", normalized.ProxyJump)
 	}
+	for _, forward := range normalized.LocalForwards {
+		args = append(args, "-L", forward)
+	}
+	for _, forward := range normalized.RemoteForwards {
+		args = append(args, "-R", forward)
+	}
+	for _, forward := range normalized.DynamicForwards {
+		args = append(args, "-D", forward)
+	}
 	target := normalized.Host
 	if normalized.User != "" {
 		target = normalized.User + "@" + normalized.Host
 	}
 	args = append(args, target)
+	if normalized.RemoteCommand != "" {
+		args = append(args, normalized.RemoteCommand)
+	}
 	return args, nil
 }
 

@@ -8,16 +8,20 @@ import (
 func TestValidateNormalizesValidProfile(t *testing.T) {
 	now := time.Date(2026, 6, 8, 12, 0, 0, 0, time.UTC)
 	p := Profile{
-		Name:         "  prod-web-01  ",
-		Host:         "  192.0.2.10  ",
-		User:         " deploy ",
-		Port:         0,
-		IdentityFile: " ~/.ssh/id_ed25519 ",
-		Tags:         []string{" prod ", " web "},
-		Notes:        " production host ",
-		ProxyJump:    " bastion ",
-		CreatedAt:    now,
-		UpdatedAt:    now,
+		Name:            "  prod-web-01  ",
+		Host:            "  192.0.2.10  ",
+		User:            " deploy ",
+		Port:            0,
+		IdentityFile:    " ~/.ssh/id_ed25519 ",
+		Tags:            []string{" prod ", " web "},
+		Notes:           " production host ",
+		ProxyJump:       " bastion ",
+		LocalForwards:   []string{" 127.0.0.1:15432:db.internal:5432 "},
+		RemoteForwards:  []string{" 0.0.0.0:18080:localhost:8080 "},
+		DynamicForwards: []string{" 127.0.0.1:1080 "},
+		RemoteCommand:   " uptime ",
+		CreatedAt:       now,
+		UpdatedAt:       now,
 	}
 
 	got, err := Validate(p)
@@ -42,6 +46,18 @@ func TestValidateNormalizesValidProfile(t *testing.T) {
 	}
 	if got.ProxyJump != "bastion" {
 		t.Fatalf("ProxyJump not normalized: %q", got.ProxyJump)
+	}
+	if got.LocalForwards[0] != "127.0.0.1:15432:db.internal:5432" {
+		t.Fatalf("LocalForwards not normalized: %#v", got.LocalForwards)
+	}
+	if got.RemoteForwards[0] != "0.0.0.0:18080:localhost:8080" {
+		t.Fatalf("RemoteForwards not normalized: %#v", got.RemoteForwards)
+	}
+	if got.DynamicForwards[0] != "127.0.0.1:1080" {
+		t.Fatalf("DynamicForwards not normalized: %#v", got.DynamicForwards)
+	}
+	if got.RemoteCommand != "uptime" {
+		t.Fatalf("RemoteCommand not normalized: %q", got.RemoteCommand)
 	}
 	if len(got.Tags) != 2 || got.Tags[0] != "prod" || got.Tags[1] != "web" {
 		t.Fatalf("Tags not normalized: %#v", got.Tags)
@@ -95,10 +111,24 @@ func TestValidateRejectsPrivateKeyLikeOrMultilineMetadata(t *testing.T) {
 	cases := []Profile{
 		{Name: "key", Host: "example.com", IdentityFile: "-----BEGIN OPENSSH PRIVATE KEY-----"},
 		{Name: "notes", Host: "example.com", Notes: "line one\nline two"},
+		{Name: "cmd", Host: "example.com", RemoteCommand: "echo ok\nwhoami"},
 	}
 	for _, tc := range cases {
 		if _, err := Validate(tc); err == nil {
 			t.Fatalf("Validate(%#v) nil error, want unsafe metadata rejected", tc)
+		}
+	}
+}
+
+func TestValidateRejectsUnsafeForwardingValues(t *testing.T) {
+	cases := []Profile{
+		{Name: "local", Host: "example.com", LocalForwards: []string{"-oProxyCommand=pwn"}},
+		{Name: "remote", Host: "example.com", RemoteForwards: []string{"bad\nvalue"}},
+		{Name: "dynamic", Host: "example.com", DynamicForwards: []string{"-----BEGIN OPENSSH PRIVATE KEY-----"}},
+	}
+	for _, tc := range cases {
+		if _, err := Validate(tc); err == nil {
+			t.Fatalf("Validate(%#v) nil error, want unsafe forwarding rejected", tc)
 		}
 	}
 }

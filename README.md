@@ -6,9 +6,9 @@ v0.1 is intentionally conservative. It stores SSH profile metadata and key file 
 
 ## Status
 
-v0.1 is implemented and locally validated.
+v0.2 is in progress on the finish-line train. v0.1.0 is the current public release.
 
-Implemented v0.1 capabilities:
+Implemented capabilities:
 
 - Go single-binary CLI skeleton.
 - Validated SSH profile model.
@@ -17,6 +17,8 @@ Implemented v0.1 capabilities:
 - Safe shell-quoted dry-run preview.
 - CLI CRUD: `add`, `list`, `show`, `edit`, `delete`.
 - Connect by name: `connect NAME --dry-run` and shorthand `sshdex NAME --dry-run`.
+- SSH forwarding metadata: `--local-forward`, `--remote-forward`, `--dynamic-forward`.
+- Remote command metadata: `--remote-command`.
 - `doctor` diagnostics.
 - Import from OpenSSH config: `import PATH [--dry-run]`.
 
@@ -52,6 +54,18 @@ sshdex add \
   --notes "main production web host"
 ```
 
+Optional SSH flow flags can be repeated where OpenSSH allows them:
+
+```bash
+sshdex add \
+  --name prod-db-tunnel \
+  --host bastion.example.com \
+  --user deploy \
+  --local-forward 127.0.0.1:15432:db.internal:5432 \
+  --dynamic-forward 127.0.0.1:1080 \
+  --remote-command "uptime -p"
+```
+
 ### List profiles
 
 ```bash
@@ -70,6 +84,7 @@ sshdex show prod-web-01
 
 ```bash
 sshdex edit prod-web-01 --host 203.0.113.11 --tag prod --tag web
+sshdex edit prod-db-tunnel --local-forward 127.0.0.1:15433:db.internal:5432
 ```
 
 ### Delete a profile
@@ -120,6 +135,10 @@ Supported imported directives in v0.1:
 - `Port`
 - `IdentityFile`
 - `ProxyJump`
+- `LocalForward`
+- `RemoteForward`
+- `DynamicForward`
+- `RemoteCommand`
 
 Wildcard host blocks like `Host *` are skipped.
 
@@ -149,6 +168,8 @@ sshdex v0.1 follows a conservative local-first security posture:
 - Stores only metadata and key file paths.
 - Uses argv execution for OpenSSH rather than shell command strings.
 - Provides dry-run previews that quote shell-special arguments for readability.
+- Supports OpenSSH local, remote, and dynamic forwarding arguments as argv, not shell strings.
+- Supports optional remote command metadata appended after the SSH target.
 - Does not mutate `~/.ssh/config` during import.
 
 The research/architecture work behind this release treats SSH key management as a high-value security boundary. Password vaults, encrypted sync, team sharing, and MCP/AI agent access are deliberately deferred until separate threat modeling and tests exist.

@@ -40,6 +40,31 @@ func TestBuildArgsIncludesProxyJump(t *testing.T) {
 	}
 }
 
+func TestBuildArgsIncludesForwardsAndRemoteCommand(t *testing.T) {
+	got, err := BuildArgs(profile.Profile{
+		Name:            "prod",
+		Host:            "target",
+		User:            "deploy",
+		LocalForwards:   []string{"127.0.0.1:15432:db.internal:5432"},
+		RemoteForwards:  []string{"0.0.0.0:18080:localhost:8080"},
+		DynamicForwards: []string{"127.0.0.1:1080"},
+		RemoteCommand:   "uptime -p",
+	})
+	if err != nil {
+		t.Fatalf("BuildArgs() error: %v", err)
+	}
+	want := []string{
+		"-L", "127.0.0.1:15432:db.internal:5432",
+		"-R", "0.0.0.0:18080:localhost:8080",
+		"-D", "127.0.0.1:1080",
+		"deploy@target",
+		"uptime -p",
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("BuildArgs() = %#v, want %#v", got, want)
+	}
+}
+
 func TestPreviewShellQuotesSpecialArguments(t *testing.T) {
 	got, err := Preview(profile.Profile{Name: "prod", Host: "host.example", User: "deploy", IdentityFile: "~/.ssh/prod key's file"})
 	if err != nil {

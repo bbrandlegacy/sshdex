@@ -48,6 +48,14 @@ func ParseString(input string) ([]profile.Profile, error) {
 				current.identityFile = value
 			case "proxyjump":
 				current.proxyJump = value
+			case "localforward":
+				current.localForwards = append(current.localForwards, normalizeForwardDirective(tokens[1:]))
+			case "remoteforward":
+				current.remoteForwards = append(current.remoteForwards, normalizeForwardDirective(tokens[1:]))
+			case "dynamicforward":
+				current.dynamicForwards = append(current.dynamicForwards, normalizeForwardDirective(tokens[1:]))
+			case "remotecommand":
+				current.remoteCommand = value
 			}
 		}
 	}
@@ -68,7 +76,7 @@ func ParseString(input string) ([]profile.Profile, error) {
 			if host == "" {
 				host = alias
 			}
-			p, err := profile.Validate(profile.Profile{Name: alias, Host: host, User: b.user, Port: b.port, IdentityFile: b.identityFile, ProxyJump: b.proxyJump, CreatedAt: now, UpdatedAt: now})
+			p, err := profile.Validate(profile.Profile{Name: alias, Host: host, User: b.user, Port: b.port, IdentityFile: b.identityFile, ProxyJump: b.proxyJump, LocalForwards: b.localForwards, RemoteForwards: b.remoteForwards, DynamicForwards: b.dynamicForwards, RemoteCommand: b.remoteCommand, CreatedAt: now, UpdatedAt: now})
 			if err != nil {
 				return nil, err
 			}
@@ -81,6 +89,10 @@ func ParseString(input string) ([]profile.Profile, error) {
 type block struct {
 	aliases                                 []string
 	hostName, user, identityFile, proxyJump string
+	localForwards                           []string
+	remoteForwards                          []string
+	dynamicForwards                         []string
+	remoteCommand                           string
 	port                                    int
 }
 
@@ -94,6 +106,19 @@ func (b block) importable() bool {
 }
 
 func wildcard(s string) bool { return strings.ContainsAny(s, "*?") || strings.HasPrefix(s, "!") }
+
+func normalizeForwardDirective(parts []string) string {
+	cleaned := make([]string, 0, len(parts))
+	for _, part := range parts {
+		if part = strings.TrimSpace(part); part != "" {
+			cleaned = append(cleaned, part)
+		}
+	}
+	if len(cleaned) == 2 {
+		return cleaned[0] + ":" + cleaned[1]
+	}
+	return strings.Join(cleaned, " ")
+}
 
 func parseTokens(line string) ([]string, error) {
 	line = strings.TrimSpace(line)
