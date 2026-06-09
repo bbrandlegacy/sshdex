@@ -20,7 +20,7 @@ import (
 	"github.com/bbrandlegacy/sshdex/internal/store"
 )
 
-const Version = "0.4.0"
+const Version = "0.5.0"
 
 type options struct {
 	storePath string
@@ -69,6 +69,8 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		return runExport(opts.storePath, rest, stdout, stderr)
 	case "backup":
 		return runBackup(opts.storePath, rest, stdout, stderr)
+	case "completion":
+		return runCompletion(rest, stdout, stderr)
 	case "doctor":
 		return runDoctor(opts.storePath, stdout, stderr)
 	default:
@@ -605,6 +607,57 @@ func confirm(stdout io.Writer, stdin *os.File, question string) bool {
 	return answer == "y" || answer == "yes"
 }
 
+func runCompletion(args []string, stdout, stderr io.Writer) int {
+	if len(args) != 1 {
+		fmt.Fprintln(stderr, "completion requires SHELL: bash, zsh, or fish")
+		return 2
+	}
+	switch args[0] {
+	case "bash":
+		fmt.Fprint(stdout, bashCompletion())
+	case "zsh":
+		fmt.Fprint(stdout, zshCompletion())
+	case "fish":
+		fmt.Fprint(stdout, fishCompletion())
+	default:
+		fmt.Fprintln(stderr, "unsupported shell: "+args[0])
+		return 2
+	}
+	return 0
+}
+
+func completionCommands() string {
+	return "add list show edit delete connect pick import export backup completion doctor version help"
+}
+
+func bashCompletion() string {
+	return fmt.Sprintf(`# sshdex bash completion
+_sshdex_completion() {
+  local cur="${COMP_WORDS[COMP_CWORD]}"
+  if [[ COMP_CWORD -eq 1 ]]; then
+    COMPREPLY=( $(compgen -W "%s" -- "$cur") )
+  fi
+}
+complete -F _sshdex_completion sshdex
+`, completionCommands())
+}
+
+func zshCompletion() string {
+	return fmt.Sprintf(`#compdef sshdex
+# sshdex zsh completion
+_arguments '1:command:(%s)'
+`, completionCommands())
+}
+
+func fishCompletion() string {
+	var b strings.Builder
+	b.WriteString("# sshdex fish completion\n")
+	for _, cmd := range strings.Fields(completionCommands()) {
+		fmt.Fprintf(&b, "complete -c sshdex -f -n '__fish_use_subcommand' -a %s\n", cmd)
+	}
+	return b.String()
+}
+
 func runExport(path string, args []string, stdout, stderr io.Writer) int {
 	dest, err := onePathOrPrompt(args, stdout, os.Stdin, "Export path", "")
 	if err != nil {
@@ -765,6 +818,7 @@ Commands:
   import   Import profiles from an SSH config file
   export   Export profiles to a JSON file
   backup   Write a backup copy of the profile store
+  completion  Print shell completion script
   doctor   Show setup diagnostics
   version  Show version
 

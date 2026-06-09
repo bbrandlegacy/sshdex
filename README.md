@@ -6,7 +6,7 @@ v0.1 is intentionally conservative. It stores SSH profile metadata and key file 
 
 ## Status
 
-v0.4 is in progress on the finish-line train. v0.3.0 is the current public release.
+v0.5 is in progress on the finish-line train. v0.4.0 is the current public release.
 
 Implemented capabilities:
 
@@ -23,6 +23,7 @@ Implemented capabilities:
 - `doctor` diagnostics.
 - Import from OpenSSH config: `import [PATH] [--dry-run]`.
 - Export/backup profile JSON: `export [PATH]`, `backup [PATH]`.
+- Shell completions: `completion bash|zsh|fish`.
 
 ## Install / build from source
 
@@ -196,6 +197,14 @@ sshdex backup ./sshdex-profiles.backup.json
 ```
 
 Export and backup write the same secret-free profile JSON format used by the local store.
+
+### Shell completions
+
+```bash
+sshdex completion bash > ~/.local/share/bash-completion/completions/sshdex
+sshdex completion zsh > ~/.zfunc/_sshdex
+sshdex completion fish > ~/.config/fish/completions/sshdex.fish
+```
 
 ### Doctor
 
