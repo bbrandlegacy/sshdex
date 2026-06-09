@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/bbrandlegacy/sshdex/internal/profile"
+	"github.com/bbrandlegacy/sshdex/internal/security"
 	"github.com/bbrandlegacy/sshdex/internal/sshcmd"
 	"github.com/bbrandlegacy/sshdex/internal/sshconfig"
 	"github.com/bbrandlegacy/sshdex/internal/store"
@@ -30,7 +31,7 @@ type options struct {
 func Run(args []string, stdout, stderr io.Writer) int {
 	opts, err := parseGlobal(args)
 	if err != nil {
-		fmt.Fprintln(stderr, err)
+		printError(stderr, err)
 		return 2
 	}
 	if opts.storePath == "" {
@@ -106,6 +107,22 @@ func defaultStorePath() string {
 	return filepath.Join(base, "sshdex", "profiles.json")
 }
 
+func printError(w io.Writer, err error) {
+	fmt.Fprintln(w, security.ErrorString(err))
+}
+
+func safeText(text string) string {
+	return security.Redact(text)
+}
+
+func safeJoin(values []string, sep string) string {
+	redacted := make([]string, 0, len(values))
+	for _, value := range values {
+		redacted = append(redacted, safeText(value))
+	}
+	return strings.Join(redacted, sep)
+}
+
 func runAdd(path string, args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("add", flag.ContinueOnError)
 	fs.SetOutput(stderr)
@@ -113,7 +130,7 @@ func runAdd(path string, args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
 		interactive, err := promptProfile(stdout, os.Stdin, profile.Profile{}, true)
 		if err != nil {
-			fmt.Fprintln(stderr, err)
+			printError(stderr, err)
 			return 1
 		}
 		p = &interactive
@@ -128,18 +145,18 @@ func runAdd(path string, args []string, stdout, stderr io.Writer) int {
 	}
 	s, err := store.Load(path)
 	if err != nil {
-		fmt.Fprintln(stderr, err)
+		printError(stderr, err)
 		return 1
 	}
 	now := time.Now().UTC()
 	p.CreatedAt = now
 	p.UpdatedAt = now
 	if err := s.Add(*p); err != nil {
-		fmt.Fprintln(stderr, err)
+		printError(stderr, err)
 		return 1
 	}
 	if err := s.Save(); err != nil {
-		fmt.Fprintln(stderr, err)
+		printError(stderr, err)
 		return 1
 	}
 	fmt.Fprintf(stdout, "added %s\n", strings.TrimSpace(p.Name))
@@ -156,7 +173,7 @@ func runList(path string, args []string, stdout, stderr io.Writer) int {
 	}
 	s, err := store.Load(path)
 	if err != nil {
-		fmt.Fprintln(stderr, err)
+		printError(stderr, err)
 		return 1
 	}
 	for _, p := range s.List() {
@@ -166,7 +183,7 @@ func runList(path string, args []string, stdout, stderr io.Writer) int {
 		if *search != "" && !matchesSearch(p, *search) {
 			continue
 		}
-		fmt.Fprintf(stdout, "%s\t%s\t%s\t%s\n", p.Name, p.Host, p.User, strings.Join(p.Tags, ","))
+		fmt.Fprintf(stdout, "%s	%s	%s	%s\n", safeText(p.Name), safeText(p.Host), safeText(p.User), safeJoin(p.Tags, ","))
 	}
 	return 0
 }
@@ -178,15 +195,15 @@ func runShow(path string, args []string, stdout, stderr io.Writer) int {
 	}
 	s, err := store.Load(path)
 	if err != nil {
-		fmt.Fprintln(stderr, err)
+		printError(stderr, err)
 		return 1
 	}
 	p, err := s.Get(args[0])
 	if err != nil {
-		fmt.Fprintln(stderr, err)
+		printError(stderr, err)
 		return 1
 	}
-	fmt.Fprintf(stdout, "Name: %s\nHost: %s\nUser: %s\nPort: %d\nIdentityFile: %s\nProxyJump: %s\nLocalForwards: %s\nRemoteForwards: %s\nDynamicForwards: %s\nRemoteCommand: %s\nTags: %s\nNotes: %s\nConnectionCount: %d\n", p.Name, p.Host, p.User, p.Port, p.IdentityFile, p.ProxyJump, strings.Join(p.LocalForwards, ","), strings.Join(p.RemoteForwards, ","), strings.Join(p.DynamicForwards, ","), p.RemoteCommand, strings.Join(p.Tags, ","), p.Notes, p.ConnectionCount)
+	fmt.Fprintf(stdout, "Name: %s\nHost: %s\nUser: %s\nPort: %d\nIdentityFile: %s\nProxyJump: %s\nLocalForwards: %s\nRemoteForwards: %s\nDynamicForwards: %s\nRemoteCommand: %s\nTags: %s\nNotes: %s\nConnectionCount: %d\n", safeText(p.Name), safeText(p.Host), safeText(p.User), p.Port, safeText(p.IdentityFile), safeText(p.ProxyJump), safeJoin(p.LocalForwards, ","), safeJoin(p.RemoteForwards, ","), safeJoin(p.DynamicForwards, ","), safeText(p.RemoteCommand), safeJoin(p.Tags, ","), safeText(p.Notes), p.ConnectionCount)
 	return 0
 }
 
@@ -198,12 +215,12 @@ func runEdit(path string, args []string, stdout, stderr io.Writer) int {
 	name := args[0]
 	s, err := store.Load(path)
 	if err != nil {
-		fmt.Fprintln(stderr, err)
+		printError(stderr, err)
 		return 1
 	}
 	existing, err := s.Get(name)
 	if err != nil {
-		fmt.Fprintln(stderr, err)
+		printError(stderr, err)
 		return 1
 	}
 	fs := flag.NewFlagSet("edit", flag.ContinueOnError)
@@ -212,7 +229,7 @@ func runEdit(path string, args []string, stdout, stderr io.Writer) int {
 	if len(args) == 1 {
 		interactive, err := promptProfile(stdout, os.Stdin, existing, false)
 		if err != nil {
-			fmt.Fprintln(stderr, err)
+			printError(stderr, err)
 			return 1
 		}
 		p = &interactive
@@ -239,11 +256,11 @@ func runEdit(path string, args []string, stdout, stderr io.Writer) int {
 	p.LastConnectedAt = existing.LastConnectedAt
 	p.ConnectionCount = existing.ConnectionCount
 	if err := s.Update(*p); err != nil {
-		fmt.Fprintln(stderr, err)
+		printError(stderr, err)
 		return 1
 	}
 	if err := s.Save(); err != nil {
-		fmt.Fprintln(stderr, err)
+		printError(stderr, err)
 		return 1
 	}
 	fmt.Fprintf(stdout, "updated %s\n", p.Name)
@@ -266,25 +283,25 @@ func runDelete(path string, args []string, stdout, stderr io.Writer) int {
 		return 2
 	}
 	if !force {
-		if !confirm(stdout, os.Stdin, fmt.Sprintf("Delete %s?", names[0])) {
+		if !confirm(stdout, os.Stdin, fmt.Sprintf("Delete %s?", safeText(names[0]))) {
 			fmt.Fprintln(stdout, "cancelled")
 			return 0
 		}
 	}
 	s, err := store.Load(path)
 	if err != nil {
-		fmt.Fprintln(stderr, err)
+		printError(stderr, err)
 		return 1
 	}
 	if err := s.Delete(names[0]); err != nil {
-		fmt.Fprintln(stderr, err)
+		printError(stderr, err)
 		return 1
 	}
 	if err := s.Save(); err != nil {
-		fmt.Fprintln(stderr, err)
+		printError(stderr, err)
 		return 1
 	}
-	fmt.Fprintf(stdout, "deleted %s\n", names[0])
+	fmt.Fprintf(stdout, "deleted %s\n", safeText(names[0]))
 	return 0
 }
 
@@ -305,18 +322,18 @@ func runConnect(path string, args []string, stdout, stderr io.Writer) int {
 	}
 	s, err := store.Load(path)
 	if err != nil {
-		fmt.Fprintln(stderr, err)
+		printError(stderr, err)
 		return 1
 	}
 	p, err := s.Get(names[0])
 	if err != nil {
-		fmt.Fprintln(stderr, err)
+		printError(stderr, err)
 		return 1
 	}
 	if dryRun {
 		preview, err := sshcmd.Preview(p)
 		if err != nil {
-			fmt.Fprintln(stderr, err)
+			printError(stderr, err)
 			return 1
 		}
 		fmt.Fprintln(stdout, preview)
@@ -324,7 +341,7 @@ func runConnect(path string, args []string, stdout, stderr io.Writer) int {
 	}
 	argv, err := sshcmd.BuildArgs(p)
 	if err != nil {
-		fmt.Fprintln(stderr, err)
+		printError(stderr, err)
 		return 1
 	}
 	now := time.Now().UTC()
@@ -337,7 +354,7 @@ func runConnect(path string, args []string, stdout, stderr io.Writer) int {
 	c.Stderr = stderr
 	c.Stdin = os.Stdin
 	if err := c.Run(); err != nil {
-		fmt.Fprintln(stderr, err)
+		printError(stderr, err)
 		return 1
 	}
 	return 0
@@ -355,7 +372,7 @@ func runPick(path string, args []string, stdout, stderr io.Writer) int {
 	}
 	s, err := store.Load(path)
 	if err != nil {
-		fmt.Fprintln(stderr, err)
+		printError(stderr, err)
 		return 1
 	}
 	matches := []profile.Profile{}
@@ -370,7 +387,7 @@ func runPick(path string, args []string, stdout, stderr io.Writer) int {
 	}
 	if *index == 0 {
 		for i, p := range matches {
-			fmt.Fprintf(stdout, "%d\t%s\t%s\t%s\t%s\n", i+1, p.Name, p.Host, p.User, strings.Join(p.Tags, ","))
+			fmt.Fprintf(stdout, "%d	%s	%s	%s	%s\n", i+1, safeText(p.Name), safeText(p.Host), safeText(p.User), safeJoin(p.Tags, ","))
 		}
 		return 0
 	}
@@ -387,9 +404,13 @@ func runPick(path string, args []string, stdout, stderr io.Writer) int {
 }
 
 func runDoctor(path string, stdout, stderr io.Writer) int {
+	diagnostics := store.SecurityDiagnostics(path)
 	s, err := store.Load(path)
 	if err != nil {
-		fmt.Fprintln(stderr, err)
+		for _, diagnostic := range diagnostics {
+			fmt.Fprintf(stdout, "StoreSecurity: %s: %s (fix: %s)\n", diagnostic.Severity, safeText(diagnostic.Message), safeText(diagnostic.Fix))
+		}
+		printError(stderr, err)
 		return 1
 	}
 	sshPath, err := exec.LookPath("ssh")
@@ -398,9 +419,15 @@ func runDoctor(path string, stdout, stderr io.Writer) int {
 		sshStatus = sshPath
 	}
 	invalid := doctorInvalidProfiles(s.List())
-	fmt.Fprintf(stdout, "Store: %s\nProfiles: %d\nSSH: %s\nInvalidProfiles: %d\n", path, len(s.List()), sshStatus, len(invalid))
+	fmt.Fprintf(stdout, "Store: %s\nProfiles: %d\nSSH: %s\nInvalidProfiles: %d\nStoreSecurityFindings: %d\n", safeText(path), len(s.List()), safeText(sshStatus), len(invalid), len(diagnostics))
+	for _, diagnostic := range diagnostics {
+		fmt.Fprintf(stdout, "- %s: %s (fix: %s)\n", diagnostic.Severity, safeText(diagnostic.Message), safeText(diagnostic.Fix))
+	}
 	for _, msg := range invalid {
-		fmt.Fprintf(stdout, "- %s\n", msg)
+		if len(diagnostics) > 0 {
+			break
+		}
+		fmt.Fprintf(stdout, "- %s\n", safeText(msg))
 	}
 	return 0
 }
@@ -448,7 +475,7 @@ func runImport(path string, args []string, stdout, stderr io.Writer) int {
 	if len(files) == 0 {
 		inputPath, err := promptLine(stdout, bufio.NewReader(os.Stdin), "SSH config path", "")
 		if err != nil {
-			fmt.Fprintln(stderr, err)
+			printError(stderr, err)
 			return 1
 		}
 		if strings.TrimSpace(inputPath) != "" {
@@ -461,23 +488,23 @@ func runImport(path string, args []string, stdout, stderr io.Writer) int {
 	}
 	data, err := os.ReadFile(files[0])
 	if err != nil {
-		fmt.Fprintln(stderr, err)
+		printError(stderr, err)
 		return 1
 	}
 	profiles, err := sshconfig.ParseString(string(data))
 	if err != nil {
-		fmt.Fprintln(stderr, err)
+		printError(stderr, err)
 		return 1
 	}
 	if dryRun {
 		for _, p := range profiles {
-			fmt.Fprintf(stdout, "%s\t%s\t%s\n", p.Name, p.Host, p.User)
+			fmt.Fprintf(stdout, "%s	%s	%s\n", safeText(p.Name), safeText(p.Host), safeText(p.User))
 		}
 		return 0
 	}
 	s, err := store.Load(path)
 	if err != nil {
-		fmt.Fprintln(stderr, err)
+		printError(stderr, err)
 		return 1
 	}
 	imported, skipped := 0, 0
@@ -487,13 +514,13 @@ func runImport(path string, args []string, stdout, stderr io.Writer) int {
 				skipped++
 				continue
 			}
-			fmt.Fprintln(stderr, err)
+			printError(stderr, err)
 			return 1
 		}
 		imported++
 	}
 	if err := s.Save(); err != nil {
-		fmt.Fprintln(stderr, err)
+		printError(stderr, err)
 		return 1
 	}
 	fmt.Fprintf(stdout, "imported %d profile(s), skipped %d duplicate(s)\n", imported, skipped)
@@ -620,7 +647,7 @@ func runCompletion(args []string, stdout, stderr io.Writer) int {
 	case "fish":
 		fmt.Fprint(stdout, fishCompletion())
 	default:
-		fmt.Fprintln(stderr, "unsupported shell: "+args[0])
+		fmt.Fprintln(stderr, "unsupported shell: "+safeText(args[0]))
 		return 2
 	}
 	return 0
@@ -661,7 +688,7 @@ func fishCompletion() string {
 func runExport(path string, args []string, stdout, stderr io.Writer) int {
 	dest, err := onePathOrPrompt(args, stdout, os.Stdin, "Export path", "")
 	if err != nil {
-		fmt.Fprintln(stderr, err)
+		printError(stderr, err)
 		return 1
 	}
 	if strings.TrimSpace(dest) == "" {
@@ -670,14 +697,14 @@ func runExport(path string, args []string, stdout, stderr io.Writer) int {
 	}
 	s, err := store.Load(path)
 	if err != nil {
-		fmt.Fprintln(stderr, err)
+		printError(stderr, err)
 		return 1
 	}
 	if err := writeProfilesFile(dest, s.List()); err != nil {
-		fmt.Fprintln(stderr, err)
+		printError(stderr, err)
 		return 1
 	}
-	fmt.Fprintf(stdout, "exported %d profile(s) to %s\n", len(s.List()), dest)
+	fmt.Fprintf(stdout, "exported %d profile(s) to %s\n", len(s.List()), safeText(dest))
 	return 0
 }
 
@@ -685,7 +712,7 @@ func runBackup(path string, args []string, stdout, stderr io.Writer) int {
 	defaultPath := path + ".bak"
 	dest, err := onePathOrPrompt(args, stdout, os.Stdin, "Backup path", defaultPath)
 	if err != nil {
-		fmt.Fprintln(stderr, err)
+		printError(stderr, err)
 		return 1
 	}
 	if strings.TrimSpace(dest) == "" {
@@ -693,14 +720,14 @@ func runBackup(path string, args []string, stdout, stderr io.Writer) int {
 	}
 	s, err := store.Load(path)
 	if err != nil {
-		fmt.Fprintln(stderr, err)
+		printError(stderr, err)
 		return 1
 	}
 	if err := writeProfilesFile(dest, s.List()); err != nil {
-		fmt.Fprintln(stderr, err)
+		printError(stderr, err)
 		return 1
 	}
-	fmt.Fprintf(stdout, "backup written to %s\n", dest)
+	fmt.Fprintf(stdout, "backup written to %s\n", safeText(dest))
 	return 0
 }
 

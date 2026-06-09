@@ -1,9 +1,12 @@
 package profile
 
 import (
+	"strings"
 	"testing"
 	"time"
 )
+
+const fakeProtectedSentinel = "SSHDX_TEST_SECRET_DO_NOT_PRINT_12345"
 
 func TestValidateNormalizesValidProfile(t *testing.T) {
 	now := time.Date(2026, 6, 8, 12, 0, 0, 0, time.UTC)
@@ -97,12 +100,35 @@ func TestValidateRejectsDuplicateTagsAfterNormalization(t *testing.T) {
 
 func TestValidateRejectsOptionLikeHostAndUser(t *testing.T) {
 	cases := []Profile{
+		{Name: "-badname", Host: "example.com"},
 		{Name: "badhost", Host: "-oProxyCommand=touch/tmp/pwn"},
 		{Name: "baduser", Host: "example.com", User: "-lroot"},
+		{Name: "badidentity", Host: "example.com", IdentityFile: "-oProxyCommand=touch/tmp/pwn"},
+		{Name: "badjump", Host: "example.com", ProxyJump: "-W target:22"},
+		{Name: "badcommand", Host: "example.com", RemoteCommand: "-oProxyCommand=touch/tmp/pwn"},
+		{Name: "badtag", Host: "example.com", Tags: []string{"-oProxyCommand=pwn"}},
 	}
 	for _, tc := range cases {
 		if _, err := Validate(tc); err == nil {
 			t.Fatalf("Validate(%#v) nil error, want option-like value rejected", tc)
+		}
+	}
+}
+
+func TestValidateRejectsProtectedMetadataWithoutLeakingValue(t *testing.T) {
+	cases := []Profile{
+		{Name: "sentinel", Host: "example.com", Notes: fakeProtectedSentinel},
+		{Name: "password", Host: "example.com", Notes: "password=" + fakeProtectedSentinel},
+		{Name: "passphrase", Host: "example.com", IdentityFile: "/tmp/passphrase=" + fakeProtectedSentinel},
+		{Name: "token", Host: "example.com", Tags: []string{"token=" + fakeProtectedSentinel}},
+	}
+	for _, tc := range cases {
+		_, err := Validate(tc)
+		if err == nil {
+			t.Fatalf("Validate(%#v) nil error, want protected metadata rejected", tc)
+		}
+		if strings.Contains(err.Error(), fakeProtectedSentinel) {
+			t.Fatalf("Validate error leaked sentinel: %v", err)
 		}
 	}
 }
@@ -117,6 +143,13 @@ func TestValidateRejectsPrivateKeyLikeOrMultilineMetadata(t *testing.T) {
 		if _, err := Validate(tc); err == nil {
 			t.Fatalf("Validate(%#v) nil error, want unsafe metadata rejected", tc)
 		}
+	}
+}
+
+func TestValidateAllowsOrdinaryCredentialWordsInProse(t *testing.T) {
+	_, err := Validate(Profile{Name: "prod", Host: "example.com", Notes: "passwordless login for secret project"})
+	if err != nil {
+		t.Fatalf("Validate ordinary prose error: %v", err)
 	}
 }
 
