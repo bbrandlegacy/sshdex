@@ -6,7 +6,7 @@ v0.1 is intentionally conservative. It stores SSH profile metadata and key file 
 
 ## Status
 
-v0.2 is in progress on the finish-line train. v0.1.0 is the current public release.
+v0.4 is in progress on the finish-line train. v0.3.0 is the current public release.
 
 Implemented capabilities:
 
@@ -15,13 +15,14 @@ Implemented capabilities:
 - Local JSON profile store.
 - Deterministic OpenSSH argv generation.
 - Safe shell-quoted dry-run preview.
-- CLI CRUD: `add`, `list`, `show`, `edit`, `delete`.
+- Interactive-first CLI CRUD: `add`, `list`, `show`, `edit`, `delete`.
 - Connect by name: `connect NAME --dry-run` and shorthand `sshdex NAME --dry-run`.
 - Search/select profile picker: `pick [--search Q] [--tag TAG] [--index N] [--dry-run]`.
 - SSH forwarding metadata: `--local-forward`, `--remote-forward`, `--dynamic-forward`.
 - Remote command metadata: `--remote-command`.
 - `doctor` diagnostics.
-- Import from OpenSSH config: `import PATH [--dry-run]`.
+- Import from OpenSSH config: `import [PATH] [--dry-run]`.
+- Export/backup profile JSON: `export [PATH]`, `backup [PATH]`.
 
 ## Install / build from source
 
@@ -42,6 +43,14 @@ go build -o /tmp/sshdex-demo/sshdex ./cmd/sshdex
 ## Commands
 
 ### Add a profile
+
+Interactive default:
+
+```bash
+sshdex add
+```
+
+`add` prompts for name, host, user, port, identity file, tags, notes, ProxyJump, forwards, and remote command. For scripts/automation, flags are still accepted:
 
 ```bash
 sshdex add \
@@ -84,6 +93,12 @@ sshdex show prod-web-01
 ### Edit a profile
 
 ```bash
+sshdex edit prod-web-01
+```
+
+`edit NAME` prompts through the existing values and keeps defaults when you press Enter. Automation flags are still accepted:
+
+```bash
 sshdex edit prod-web-01 --host 203.0.113.11 --tag prod --tag web
 sshdex edit prod-db-tunnel --local-forward 127.0.0.1:15433:db.internal:5432
 ```
@@ -91,10 +106,14 @@ sshdex edit prod-db-tunnel --local-forward 127.0.0.1:15433:db.internal:5432
 ### Delete a profile
 
 ```bash
-sshdex delete prod-web-01 --force
+sshdex delete prod-web-01
 ```
 
-`--force` is required in v0.1 to avoid accidental deletes in non-interactive mode.
+`delete NAME` asks for confirmation. For non-interactive automation, use `--force`:
+
+```bash
+sshdex delete prod-web-01 --force
+```
 
 ### Pick/search profiles
 
@@ -134,16 +153,18 @@ sshdex prod-web-01
 Preview importable entries:
 
 ```bash
+sshdex import --dry-run
 sshdex import ~/.ssh/config --dry-run
 ```
 
 Import entries:
 
 ```bash
+sshdex import
 sshdex import ~/.ssh/config
 ```
 
-Import reads the source SSH config and never overwrites it. Duplicate profile names are skipped.
+When no path is provided, `import` prompts for the SSH config path. Import reads the source SSH config and never overwrites it. Duplicate profile names are skipped.
 
 Supported imported directives in v0.1:
 
@@ -159,6 +180,22 @@ Supported imported directives in v0.1:
 - `RemoteCommand`
 
 Wildcard host blocks like `Host *` are skipped.
+
+### Export / backup
+
+```bash
+sshdex export
+sshdex backup
+```
+
+Both commands prompt for a destination path when omitted. For automation, pass the path directly:
+
+```bash
+sshdex export ./sshdex-profiles.json
+sshdex backup ./sshdex-profiles.backup.json
+```
+
+Export and backup write the same secret-free profile JSON format used by the local store.
 
 ### Doctor
 

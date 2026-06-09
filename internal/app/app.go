@@ -1,6 +1,8 @@
 package app
 
 import (
+	"bufio"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -18,7 +20,7 @@ import (
 	"github.com/bbrandlegacy/sshdex/internal/store"
 )
 
-const Version = "0.3.0"
+const Version = "0.4.0"
 
 type options struct {
 	storePath string
@@ -63,6 +65,10 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		return runPick(opts.storePath, rest, stdout, stderr)
 	case "import":
 		return runImport(opts.storePath, rest, stdout, stderr)
+	case "export":
+		return runExport(opts.storePath, rest, stdout, stderr)
+	case "backup":
+		return runBackup(opts.storePath, rest, stdout, stderr)
 	case "doctor":
 		return runDoctor(opts.storePath, stdout, stderr)
 	default:
@@ -102,13 +108,22 @@ func runAdd(path string, args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("add", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	p, tags, locals, remotes, dynamics := bindProfileFlags(fs, profile.Profile{})
-	if err := fs.Parse(args); err != nil {
-		return 2
+	if len(args) == 0 {
+		interactive, err := promptProfile(stdout, os.Stdin, profile.Profile{}, true)
+		if err != nil {
+			fmt.Fprintln(stderr, err)
+			return 1
+		}
+		p = &interactive
+	} else {
+		if err := fs.Parse(args); err != nil {
+			return 2
+		}
+		p.Tags = tags.Values
+		p.LocalForwards = locals.Values
+		p.RemoteForwards = remotes.Values
+		p.DynamicForwards = dynamics.Values
 	}
-	p.Tags = tags.Values
-	p.LocalForwards = locals.Values
-	p.RemoteForwards = remotes.Values
-	p.DynamicForwards = dynamics.Values
 	s, err := store.Load(path)
 	if err != nil {
 		fmt.Fprintln(stderr, err)
@@ -192,20 +207,29 @@ func runEdit(path string, args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("edit", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	p, tags, locals, remotes, dynamics := bindProfileFlags(fs, existing)
-	if err := fs.Parse(args[1:]); err != nil {
-		return 2
-	}
-	if tags.Seen {
-		p.Tags = tags.Values
-	}
-	if locals.Seen {
-		p.LocalForwards = locals.Values
-	}
-	if remotes.Seen {
-		p.RemoteForwards = remotes.Values
-	}
-	if dynamics.Seen {
-		p.DynamicForwards = dynamics.Values
+	if len(args) == 1 {
+		interactive, err := promptProfile(stdout, os.Stdin, existing, false)
+		if err != nil {
+			fmt.Fprintln(stderr, err)
+			return 1
+		}
+		p = &interactive
+	} else {
+		if err := fs.Parse(args[1:]); err != nil {
+			return 2
+		}
+		if tags.Seen {
+			p.Tags = tags.Values
+		}
+		if locals.Seen {
+			p.LocalForwards = locals.Values
+		}
+		if remotes.Seen {
+			p.RemoteForwards = remotes.Values
+		}
+		if dynamics.Seen {
+			p.DynamicForwards = dynamics.Values
+		}
 	}
 	p.Name = existing.Name
 	p.CreatedAt = existing.CreatedAt
@@ -240,8 +264,10 @@ func runDelete(path string, args []string, stdout, stderr io.Writer) int {
 		return 2
 	}
 	if !force {
-		fmt.Fprintln(stderr, "delete requires --force in v0.1")
-		return 2
+		if !confirm(stdout, os.Stdin, fmt.Sprintf("Delete %s?", names[0])) {
+			fmt.Fprintln(stdout, "cancelled")
+			return 0
+		}
 	}
 	s, err := store.Load(path)
 	if err != nil {
@@ -417,6 +443,16 @@ func runImport(path string, args []string, stdout, stderr io.Writer) int {
 			files = append(files, arg)
 		}
 	}
+	if len(files) == 0 {
+		inputPath, err := promptLine(stdout, bufio.NewReader(os.Stdin), "SSH config path", "")
+		if err != nil {
+			fmt.Fprintln(stderr, err)
+			return 1
+		}
+		if strings.TrimSpace(inputPath) != "" {
+			files = append(files, inputPath)
+		}
+	}
 	if len(files) != 1 {
 		fmt.Fprintln(stderr, "import requires PATH")
 		return 2
@@ -460,6 +496,207 @@ func runImport(path string, args []string, stdout, stderr io.Writer) int {
 	}
 	fmt.Fprintf(stdout, "imported %d profile(s), skipped %d duplicate(s)\n", imported, skipped)
 	return 0
+}
+
+func promptProfile(stdout io.Writer, stdin *os.File, base profile.Profile, requireName bool) (profile.Profile, error) {
+	reader := bufio.NewReader(stdin)
+	p := base
+	var err error
+	if requireName {
+		p.Name, err = promptLine(stdout, reader, "Name", p.Name)
+		if err != nil {
+			return profile.Profile{}, err
+		}
+	}
+	if p.Host, err = promptLine(stdout, reader, "Host", p.Host); err != nil {
+		return profile.Profile{}, err
+	}
+	if p.User, err = promptLine(stdout, reader, "User", p.User); err != nil {
+		return profile.Profile{}, err
+	}
+	portDefault := ""
+	if p.Port != 0 {
+		portDefault = strconv.Itoa(p.Port)
+	}
+	portText, err := promptLine(stdout, reader, "Port", portDefault)
+	if err != nil {
+		return profile.Profile{}, err
+	}
+	if strings.TrimSpace(portText) != "" {
+		p.Port, err = strconv.Atoi(strings.TrimSpace(portText))
+		if err != nil {
+			return profile.Profile{}, fmt.Errorf("invalid port %q", portText)
+		}
+	}
+	if p.IdentityFile, err = promptLine(stdout, reader, "Identity file", p.IdentityFile); err != nil {
+		return profile.Profile{}, err
+	}
+	tagText, err := promptLine(stdout, reader, "Tags (comma-separated)", strings.Join(p.Tags, ","))
+	if err != nil {
+		return profile.Profile{}, err
+	}
+	p.Tags = splitCSV(tagText)
+	if p.Notes, err = promptLine(stdout, reader, "Notes", p.Notes); err != nil {
+		return profile.Profile{}, err
+	}
+	if p.ProxyJump, err = promptLine(stdout, reader, "ProxyJump", p.ProxyJump); err != nil {
+		return profile.Profile{}, err
+	}
+	localText, err := promptLine(stdout, reader, "Local forwards (-L, comma-separated)", strings.Join(p.LocalForwards, ","))
+	if err != nil {
+		return profile.Profile{}, err
+	}
+	p.LocalForwards = splitCSV(localText)
+	remoteText, err := promptLine(stdout, reader, "Remote forwards (-R, comma-separated)", strings.Join(p.RemoteForwards, ","))
+	if err != nil {
+		return profile.Profile{}, err
+	}
+	p.RemoteForwards = splitCSV(remoteText)
+	dynamicText, err := promptLine(stdout, reader, "Dynamic forwards (-D, comma-separated)", strings.Join(p.DynamicForwards, ","))
+	if err != nil {
+		return profile.Profile{}, err
+	}
+	p.DynamicForwards = splitCSV(dynamicText)
+	if p.RemoteCommand, err = promptLine(stdout, reader, "Remote command", p.RemoteCommand); err != nil {
+		return profile.Profile{}, err
+	}
+	return p, nil
+}
+
+func promptLine(stdout io.Writer, reader *bufio.Reader, label, defaultValue string) (string, error) {
+	if defaultValue == "" {
+		fmt.Fprintf(stdout, "%s: ", label)
+	} else {
+		fmt.Fprintf(stdout, "%s [%s]: ", label, defaultValue)
+	}
+	line, err := reader.ReadString('\n')
+	if err != nil && !errors.Is(err, io.EOF) {
+		return "", err
+	}
+	line = strings.TrimSpace(line)
+	if line == "" {
+		return defaultValue, nil
+	}
+	return line, nil
+}
+
+func splitCSV(s string) []string {
+	if strings.TrimSpace(s) == "" {
+		return nil
+	}
+	parts := strings.Split(s, ",")
+	out := make([]string, 0, len(parts))
+	for _, part := range parts {
+		if part = strings.TrimSpace(part); part != "" {
+			out = append(out, part)
+		}
+	}
+	return out
+}
+
+func confirm(stdout io.Writer, stdin *os.File, question string) bool {
+	reader := bufio.NewReader(stdin)
+	fmt.Fprintf(stdout, "%s [y/N]: ", question)
+	line, err := reader.ReadString('\n')
+	if err != nil && !errors.Is(err, io.EOF) {
+		return false
+	}
+	answer := strings.ToLower(strings.TrimSpace(line))
+	return answer == "y" || answer == "yes"
+}
+
+func runExport(path string, args []string, stdout, stderr io.Writer) int {
+	dest, err := onePathOrPrompt(args, stdout, os.Stdin, "Export path", "")
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	if strings.TrimSpace(dest) == "" {
+		fmt.Fprintln(stderr, "export requires PATH")
+		return 2
+	}
+	s, err := store.Load(path)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	if err := writeProfilesFile(dest, s.List()); err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	fmt.Fprintf(stdout, "exported %d profile(s) to %s\n", len(s.List()), dest)
+	return 0
+}
+
+func runBackup(path string, args []string, stdout, stderr io.Writer) int {
+	defaultPath := path + ".bak"
+	dest, err := onePathOrPrompt(args, stdout, os.Stdin, "Backup path", defaultPath)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	if strings.TrimSpace(dest) == "" {
+		dest = defaultPath
+	}
+	s, err := store.Load(path)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	if err := writeProfilesFile(dest, s.List()); err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	fmt.Fprintf(stdout, "backup written to %s\n", dest)
+	return 0
+}
+
+func onePathOrPrompt(args []string, stdout io.Writer, stdin *os.File, label, defaultValue string) (string, error) {
+	paths := []string{}
+	for _, arg := range args {
+		paths = append(paths, arg)
+	}
+	if len(paths) == 0 {
+		return promptLine(stdout, bufio.NewReader(stdin), label, defaultValue)
+	}
+	if len(paths) != 1 {
+		return "", fmt.Errorf("expected one path")
+	}
+	return paths[0], nil
+}
+
+type exportedProfiles struct {
+	Profiles []profile.Profile `json:"profiles"`
+}
+
+func writeProfilesFile(path string, profiles []profile.Profile) error {
+	data, err := json.MarshalIndent(exportedProfiles{Profiles: profiles}, "", "  ")
+	if err != nil {
+		return err
+	}
+	data = append(data, '\n')
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return err
+	}
+	tmp, err := os.CreateTemp(dir, ".sshdex-export-*.tmp")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	defer func() { _ = os.Remove(tmpName) }()
+	if _, err := tmp.Write(data); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Chmod(0o600); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmpName, path)
 }
 
 type tagValues struct {
@@ -526,6 +763,8 @@ Commands:
   connect  Connect to a profile
   pick     Search/select a profile by number
   import   Import profiles from an SSH config file
+  export   Export profiles to a JSON file
+  backup   Write a backup copy of the profile store
   doctor   Show setup diagnostics
   version  Show version
 

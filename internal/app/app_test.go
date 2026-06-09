@@ -9,6 +9,27 @@ import (
 
 func runCLI(t *testing.T, storePath string, args ...string) (string, string, int) {
 	t.Helper()
+	return runCLIWithInput(t, "", storePath, args...)
+}
+
+func runCLIWithInput(t *testing.T, input, storePath string, args ...string) (string, string, int) {
+	t.Helper()
+	oldStdin := os.Stdin
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("pipe stdin: %v", err)
+	}
+	if _, err := w.WriteString(input); err != nil {
+		t.Fatalf("write stdin: %v", err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatalf("close stdin writer: %v", err)
+	}
+	os.Stdin = r
+	defer func() {
+		os.Stdin = oldStdin
+		_ = r.Close()
+	}()
 	var stdout, stderr bytes.Buffer
 	code := Run(argsWithStore(storePath, args...), &stdout, &stderr)
 	return stdout.String(), stderr.String(), code
@@ -17,6 +38,50 @@ func runCLI(t *testing.T, storePath string, args ...string) (string, string, int
 func argsWithStore(storePath string, args ...string) []string {
 	out := []string{"--store", storePath}
 	return append(out, args...)
+}
+
+func TestCLIInteractiveAddAndDeleteConfirmation(t *testing.T) {
+	storePath := t.TempDir() + "/profiles.json"
+	input := strings.Join([]string{
+		"interactive-prod",
+		"interactive.example.com",
+		"deploy",
+		"2200",
+		"~/.ssh/interactive",
+		"prod,web",
+		"interactive notes",
+		"bastion",
+		"127.0.0.1:15432:db.internal:5432",
+		"",
+		"",
+		"uptime -p",
+		"",
+	}, "\n")
+	stdout, stderr, code := runCLIWithInput(t, input, storePath, "add")
+	if code != 0 {
+		t.Fatalf("interactive add code=%d stdout=%q stderr=%q", code, stdout, stderr)
+	}
+	if !strings.Contains(stdout, "Name:") || !strings.Contains(stdout, "added interactive-prod") {
+		t.Fatalf("interactive add stdout missing prompts/result: %q", stdout)
+	}
+
+	stdout, stderr, code = runCLI(t, storePath, "show", "interactive-prod")
+	if code != 0 {
+		t.Fatalf("show code=%d stdout=%q stderr=%q", code, stdout, stderr)
+	}
+	for _, want := range []string{"Host: interactive.example.com", "User: deploy", "Port: 2200", "Tags: prod,web", "ProxyJump: bastion", "LocalForwards: 127.0.0.1:15432:db.internal:5432", "RemoteCommand: uptime -p"} {
+		if !strings.Contains(stdout, want) {
+			t.Fatalf("show missing %q: %q", want, stdout)
+		}
+	}
+
+	stdout, stderr, code = runCLIWithInput(t, "y\n", storePath, "delete", "interactive-prod")
+	if code != 0 {
+		t.Fatalf("interactive delete code=%d stdout=%q stderr=%q", code, stdout, stderr)
+	}
+	if !strings.Contains(stdout, "Delete interactive-prod?") || !strings.Contains(stdout, "deleted interactive-prod") {
+		t.Fatalf("interactive delete stdout unexpected: %q", stdout)
+	}
 }
 
 func TestCLIAddListShowEditDelete(t *testing.T) {
@@ -61,6 +126,43 @@ func TestCLIAddListShowEditDelete(t *testing.T) {
 	stdout, _, _ = runCLI(t, storePath, "list")
 	if strings.Contains(stdout, "prod") {
 		t.Fatalf("deleted profile still listed: %q", stdout)
+	}
+}
+
+func TestCLIInteractiveEditKeepsDefaultsAndUpdatesEnteredFields(t *testing.T) {
+	storePath := t.TempDir() + "/profiles.json"
+	_, _, code := runCLI(t, storePath, "add", "--name", "prod", "--host", "old.example.com", "--user", "deploy", "--tag", "prod")
+	if code != 0 {
+		t.Fatalf("seed add code=%d", code)
+	}
+	input := strings.Join([]string{
+		"new.example.com",
+		"",
+		"",
+		"",
+		"prod,web",
+		"updated notes",
+		"",
+		"",
+		"",
+		"",
+		"",
+	}, "\n")
+	stdout, stderr, code := runCLIWithInput(t, input, storePath, "edit", "prod")
+	if code != 0 {
+		t.Fatalf("interactive edit code=%d stdout=%q stderr=%q", code, stdout, stderr)
+	}
+	if !strings.Contains(stdout, "Host [old.example.com]:") || !strings.Contains(stdout, "updated prod") {
+		t.Fatalf("interactive edit stdout unexpected: %q", stdout)
+	}
+	stdout, stderr, code = runCLI(t, storePath, "show", "prod")
+	if code != 0 {
+		t.Fatalf("show code=%d stdout=%q stderr=%q", code, stdout, stderr)
+	}
+	for _, want := range []string{"Host: new.example.com", "User: deploy", "Tags: prod,web", "Notes: updated notes"} {
+		if !strings.Contains(stdout, want) {
+			t.Fatalf("show missing %q: %q", want, stdout)
+		}
 	}
 }
 
@@ -199,6 +301,61 @@ func TestCLIImportDryRunAndImportDoesNotModifySource(t *testing.T) {
 	}
 }
 
+func TestCLIInteractiveImportPromptsForPath(t *testing.T) {
+	dir := t.TempDir()
+	storePath := dir + "/profiles.json"
+	configPath := dir + "/ssh_config"
+	if err := os.WriteFile(configPath, []byte("Host prompted\n  HostName prompted.example.com\n  User ops\n"), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	stdout, stderr, code := runCLIWithInput(t, configPath+"\n", storePath, "import")
+	if code != 0 {
+		t.Fatalf("interactive import code=%d stdout=%q stderr=%q", code, stdout, stderr)
+	}
+	if !strings.Contains(stdout, "SSH config path:") || !strings.Contains(stdout, "imported 1 profile") {
+		t.Fatalf("interactive import stdout unexpected: %q", stdout)
+	}
+	stdout, _, _ = runCLI(t, storePath, "show", "prompted")
+	if !strings.Contains(stdout, "Host: prompted.example.com") {
+		t.Fatalf("imported profile missing: %q", stdout)
+	}
+}
+
+func TestCLIInteractiveExportAndBackupPromptForPaths(t *testing.T) {
+	dir := t.TempDir()
+	storePath := dir + "/profiles.json"
+	exportPath := dir + "/export.json"
+	backupPath := dir + "/backup.json"
+	_, _, code := runCLI(t, storePath, "add", "--name", "prod", "--host", "example.com", "--user", "deploy")
+	if code != 0 {
+		t.Fatalf("seed add code=%d", code)
+	}
+
+	stdout, stderr, code := runCLIWithInput(t, exportPath+"\n", storePath, "export")
+	if code != 0 {
+		t.Fatalf("interactive export code=%d stdout=%q stderr=%q", code, stdout, stderr)
+	}
+	if !strings.Contains(stdout, "Export path:") || !strings.Contains(stdout, "exported 1 profile") {
+		t.Fatalf("interactive export stdout unexpected: %q", stdout)
+	}
+	data, err := os.ReadFile(exportPath)
+	if err != nil || !strings.Contains(string(data), "prod") {
+		t.Fatalf("export file err=%v data=%q", err, string(data))
+	}
+
+	stdout, stderr, code = runCLIWithInput(t, backupPath+"\n", storePath, "backup")
+	if code != 0 {
+		t.Fatalf("interactive backup code=%d stdout=%q stderr=%q", code, stdout, stderr)
+	}
+	if !strings.Contains(stdout, "Backup path") || !strings.Contains(stdout, "backup written") {
+		t.Fatalf("interactive backup stdout unexpected: %q", stdout)
+	}
+	data, err = os.ReadFile(backupPath)
+	if err != nil || !strings.Contains(string(data), "prod") {
+		t.Fatalf("backup file err=%v data=%q", err, string(data))
+	}
+}
+
 func TestHelpMentionsV01Commands(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	code := Run([]string{"help"}, &stdout, &stderr)
@@ -206,7 +363,7 @@ func TestHelpMentionsV01Commands(t *testing.T) {
 		t.Fatalf("help code=%d stderr=%q", code, stderr.String())
 	}
 	text := stdout.String()
-	for _, want := range []string{"add", "list", "show", "edit", "delete", "connect", "pick", "import", "doctor", "--store PATH"} {
+	for _, want := range []string{"add", "list", "show", "edit", "delete", "connect", "pick", "import", "export", "backup", "doctor", "--store PATH"} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("help missing %q: %s", want, text)
 		}
