@@ -137,6 +137,34 @@ func TestCLIForwardsAndRemoteCommandRoundTrip(t *testing.T) {
 	}
 }
 
+func TestCLIPickListsAndSelectsProfiles(t *testing.T) {
+	storePath := t.TempDir() + "/profiles.json"
+	for _, args := range [][]string{
+		{"add", "--name", "web", "--host", "web.example.com", "--user", "deploy", "--tag", "prod"},
+		{"add", "--name", "db", "--host", "db.example.com", "--user", "postgres", "--tag", "prod"},
+	} {
+		if stdout, stderr, code := runCLI(t, storePath, args...); code != 0 {
+			t.Fatalf("%v code=%d stdout=%q stderr=%q", args, code, stdout, stderr)
+		}
+	}
+
+	stdout, stderr, code := runCLI(t, storePath, "pick", "--tag", "prod")
+	if code != 0 {
+		t.Fatalf("pick list code=%d stdout=%q stderr=%q", code, stdout, stderr)
+	}
+	if !strings.Contains(stdout, "1\tdb\tdb.example.com") || !strings.Contains(stdout, "2\tweb\tweb.example.com") {
+		t.Fatalf("pick list stdout unexpected: %q", stdout)
+	}
+
+	stdout, stderr, code = runCLI(t, storePath, "pick", "--search", "web", "--index", "1", "--dry-run")
+	if code != 0 {
+		t.Fatalf("pick dry-run code=%d stdout=%q stderr=%q", code, stdout, stderr)
+	}
+	if strings.TrimSpace(stdout) != "ssh deploy@web.example.com" {
+		t.Fatalf("pick dry-run stdout = %q", stdout)
+	}
+}
+
 func TestCLIImportDryRunAndImportDoesNotModifySource(t *testing.T) {
 	dir := t.TempDir()
 	storePath := dir + "/profiles.json"
@@ -178,7 +206,7 @@ func TestHelpMentionsV01Commands(t *testing.T) {
 		t.Fatalf("help code=%d stderr=%q", code, stderr.String())
 	}
 	text := stdout.String()
-	for _, want := range []string{"add", "list", "show", "edit", "delete", "connect", "import", "doctor", "--store PATH"} {
+	for _, want := range []string{"add", "list", "show", "edit", "delete", "connect", "pick", "import", "doctor", "--store PATH"} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("help missing %q: %s", want, text)
 		}
