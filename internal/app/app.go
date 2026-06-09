@@ -18,7 +18,7 @@ import (
 	"github.com/bbrandlegacy/sshdex/internal/store"
 )
 
-const Version = "0.2.0"
+const Version = "0.3.0"
 
 type options struct {
 	storePath string
@@ -59,6 +59,8 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		return runDelete(opts.storePath, rest, stdout, stderr)
 	case "connect":
 		return runConnect(opts.storePath, rest, stdout, stderr)
+	case "pick":
+		return runPick(opts.storePath, rest, stdout, stderr)
 	case "import":
 		return runImport(opts.storePath, rest, stdout, stderr)
 	case "doctor":
@@ -313,6 +315,49 @@ func runConnect(path string, args []string, stdout, stderr io.Writer) int {
 	return 0
 }
 
+func runPick(path string, args []string, stdout, stderr io.Writer) int {
+	fs := flag.NewFlagSet("pick", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	tag := fs.String("tag", "", "filter by tag")
+	search := fs.String("search", "", "search name/host/tag")
+	index := fs.Int("index", 0, "1-based selected profile index")
+	dryRun := fs.Bool("dry-run", false, "print safe SSH preview instead of launching ssh")
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	s, err := store.Load(path)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	matches := []profile.Profile{}
+	for _, p := range s.List() {
+		if *tag != "" && !hasTag(p, *tag) {
+			continue
+		}
+		if *search != "" && !matchesSearch(p, *search) {
+			continue
+		}
+		matches = append(matches, p)
+	}
+	if *index == 0 {
+		for i, p := range matches {
+			fmt.Fprintf(stdout, "%d\t%s\t%s\t%s\t%s\n", i+1, p.Name, p.Host, p.User, strings.Join(p.Tags, ","))
+		}
+		return 0
+	}
+	if *index < 1 || *index > len(matches) {
+		fmt.Fprintf(stderr, "pick index %d out of range for %d match(es)\n", *index, len(matches))
+		return 2
+	}
+	selected := matches[*index-1]
+	connectArgs := []string{selected.Name}
+	if *dryRun {
+		connectArgs = append(connectArgs, "--dry-run")
+	}
+	return runConnect(path, connectArgs, stdout, stderr)
+}
+
 func runDoctor(path string, stdout, stderr io.Writer) int {
 	s, err := store.Load(path)
 	if err != nil {
@@ -479,6 +524,7 @@ Commands:
   edit     Edit a profile
   delete   Delete a profile
   connect  Connect to a profile
+  pick     Search/select a profile by number
   import   Import profiles from an SSH config file
   doctor   Show setup diagnostics
   version  Show version

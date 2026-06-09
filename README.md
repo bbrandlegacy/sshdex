@@ -17,6 +17,7 @@ Implemented capabilities:
 - Safe shell-quoted dry-run preview.
 - CLI CRUD: `add`, `list`, `show`, `edit`, `delete`.
 - Connect by name: `connect NAME --dry-run` and shorthand `sshdex NAME --dry-run`.
+- Search/select profile picker: `pick [--search Q] [--tag TAG] [--index N] [--dry-run]`.
 - SSH forwarding metadata: `--local-forward`, `--remote-forward`, `--dynamic-forward`.
 - Remote command metadata: `--remote-command`.
 - `doctor` diagnostics.
@@ -94,6 +95,23 @@ sshdex delete prod-web-01 --force
 ```
 
 `--force` is required in v0.1 to avoid accidental deletes in non-interactive mode.
+
+### Pick/search profiles
+
+List numbered matches:
+
+```bash
+sshdex pick
+sshdex pick --tag prod
+sshdex pick --search web
+```
+
+Select a numbered match and dry-run/connect it:
+
+```bash
+sshdex pick --search web --index 1 --dry-run
+sshdex pick --tag prod --index 2
+```
 
 ### Connect / dry run
 
