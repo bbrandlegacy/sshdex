@@ -356,6 +356,20 @@ func TestCLIInteractiveExportAndBackupPromptForPaths(t *testing.T) {
 	}
 }
 
+func TestCLICompletionPrintsShellScripts(t *testing.T) {
+	for _, shell := range []string{"bash", "zsh", "fish"} {
+		var stdout, stderr bytes.Buffer
+		code := Run([]string{"completion", shell}, &stdout, &stderr)
+		if code != 0 {
+			t.Fatalf("completion %s code=%d stderr=%q", shell, code, stderr.String())
+		}
+		text := stdout.String()
+		if !strings.Contains(text, "sshdex") || !strings.Contains(text, "completion") {
+			t.Fatalf("completion %s output unexpected: %q", shell, text)
+		}
+	}
+}
+
 func TestHelpMentionsV01Commands(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	code := Run([]string{"help"}, &stdout, &stderr)
@@ -363,7 +377,7 @@ func TestHelpMentionsV01Commands(t *testing.T) {
 		t.Fatalf("help code=%d stderr=%q", code, stderr.String())
 	}
 	text := stdout.String()
-	for _, want := range []string{"add", "list", "show", "edit", "delete", "connect", "pick", "import", "export", "backup", "doctor", "--store PATH"} {
+	for _, want := range []string{"add", "list", "show", "edit", "delete", "connect", "pick", "import", "export", "backup", "completion", "doctor", "--store PATH"} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("help missing %q: %s", want, text)
 		}
