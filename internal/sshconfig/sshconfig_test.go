@@ -11,6 +11,10 @@ Host prod prod-alias
     Port 2200
     IdentityFile ~/.ssh/prod key
     ProxyJump bastion
+    LocalForward 127.0.0.1:15432 db.internal:5432
+    RemoteForward 0.0.0.0:18080 localhost:8080
+    DynamicForward 127.0.0.1:1080
+    RemoteCommand "uptime -p"
     ForwardAgent yes
 
 Host *
@@ -29,6 +33,9 @@ Host dev
 	prod := profiles[0]
 	if prod.Name != "prod" || prod.Host != "prod.example.com" || prod.User != "deploy" || prod.Port != 2200 || prod.IdentityFile != "~/.ssh/prod key" || prod.ProxyJump != "bastion" {
 		t.Fatalf("prod profile unexpected: %#v", prod)
+	}
+	if prod.LocalForwards[0] != "127.0.0.1:15432:db.internal:5432" || prod.RemoteForwards[0] != "0.0.0.0:18080:localhost:8080" || prod.DynamicForwards[0] != "127.0.0.1:1080" || prod.RemoteCommand != "uptime -p" {
+		t.Fatalf("prod forwarding profile unexpected: %#v", prod)
 	}
 	alias := profiles[1]
 	if alias.Name != "prod-alias" || alias.Host != "prod.example.com" {

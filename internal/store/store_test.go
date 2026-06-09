@@ -25,7 +25,15 @@ func TestSaveLoadRoundTripDeterministicList(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load() unexpected error: %v", err)
 	}
-	if err := s.Add(profile.Profile{Name: "zeta", Host: "z.example", Tags: []string{"prod"}}); err != nil {
+	if err := s.Add(profile.Profile{
+		Name:            "zeta",
+		Host:            "z.example",
+		Tags:            []string{"prod"},
+		LocalForwards:   []string{"127.0.0.1:15432:db.internal:5432"},
+		RemoteForwards:  []string{"0.0.0.0:18080:localhost:8080"},
+		DynamicForwards: []string{"127.0.0.1:1080"},
+		RemoteCommand:   "uptime -p",
+	}); err != nil {
 		t.Fatalf("Add(zeta) error: %v", err)
 	}
 	if err := s.Add(profile.Profile{Name: "alpha", Host: "a.example", Port: 2200}); err != nil {
@@ -48,6 +56,9 @@ func TestSaveLoadRoundTripDeterministicList(t *testing.T) {
 	}
 	if got[0].Port != 2200 || got[1].Port != 22 {
 		t.Fatalf("ports not preserved/defaulted: %#v", got)
+	}
+	if got[1].LocalForwards[0] != "127.0.0.1:15432:db.internal:5432" || got[1].RemoteForwards[0] != "0.0.0.0:18080:localhost:8080" || got[1].DynamicForwards[0] != "127.0.0.1:1080" || got[1].RemoteCommand != "uptime -p" {
+		t.Fatalf("forwarding fields not preserved: %#v", got[1])
 	}
 }
 

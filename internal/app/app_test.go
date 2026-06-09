@@ -96,6 +96,47 @@ func TestCLIConnectDryRunShorthandAndDoctor(t *testing.T) {
 	}
 }
 
+func TestCLIForwardsAndRemoteCommandRoundTrip(t *testing.T) {
+	storePath := t.TempDir() + "/profiles.json"
+	stdout, stderr, code := runCLI(t, storePath,
+		"add",
+		"--name", "tunnel",
+		"--host", "example.com",
+		"--user", "deploy",
+		"--local-forward", "127.0.0.1:15432:db.internal:5432",
+		"--remote-forward", "0.0.0.0:18080:localhost:8080",
+		"--dynamic-forward", "127.0.0.1:1080",
+		"--remote-command", "uptime -p",
+	)
+	if code != 0 {
+		t.Fatalf("add code=%d stdout=%q stderr=%q", code, stdout, stderr)
+	}
+
+	stdout, stderr, code = runCLI(t, storePath, "show", "tunnel")
+	if code != 0 {
+		t.Fatalf("show code=%d stdout=%q stderr=%q", code, stdout, stderr)
+	}
+	for _, want := range []string{
+		"LocalForwards: 127.0.0.1:15432:db.internal:5432",
+		"RemoteForwards: 0.0.0.0:18080:localhost:8080",
+		"DynamicForwards: 127.0.0.1:1080",
+		"RemoteCommand: uptime -p",
+	} {
+		if !strings.Contains(stdout, want) {
+			t.Fatalf("show missing %q: %q", want, stdout)
+		}
+	}
+
+	stdout, stderr, code = runCLI(t, storePath, "connect", "tunnel", "--dry-run")
+	if code != 0 {
+		t.Fatalf("dry-run code=%d stdout=%q stderr=%q", code, stdout, stderr)
+	}
+	want := "ssh -L 127.0.0.1:15432:db.internal:5432 -R 0.0.0.0:18080:localhost:8080 -D 127.0.0.1:1080 deploy@example.com 'uptime -p'"
+	if strings.TrimSpace(stdout) != want {
+		t.Fatalf("dry-run stdout = %q, want %q", strings.TrimSpace(stdout), want)
+	}
+}
+
 func TestCLIImportDryRunAndImportDoesNotModifySource(t *testing.T) {
 	dir := t.TempDir()
 	storePath := dir + "/profiles.json"

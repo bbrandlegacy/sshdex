@@ -18,6 +18,10 @@ type Profile struct {
 	Tags            []string   `json:"tags,omitempty"`
 	Notes           string     `json:"notes,omitempty"`
 	ProxyJump       string     `json:"proxy_jump,omitempty"`
+	LocalForwards   []string   `json:"local_forwards,omitempty"`
+	RemoteForwards  []string   `json:"remote_forwards,omitempty"`
+	DynamicForwards []string   `json:"dynamic_forwards,omitempty"`
+	RemoteCommand   string     `json:"remote_command,omitempty"`
 	CreatedAt       time.Time  `json:"created_at"`
 	UpdatedAt       time.Time  `json:"updated_at"`
 	LastConnectedAt *time.Time `json:"last_connected_at,omitempty"`
@@ -38,6 +42,7 @@ func Validate(p Profile) (Profile, error) {
 	p.IdentityFile = strings.TrimSpace(p.IdentityFile)
 	p.Notes = strings.TrimSpace(p.Notes)
 	p.ProxyJump = strings.TrimSpace(p.ProxyJump)
+	p.RemoteCommand = strings.TrimSpace(p.RemoteCommand)
 
 	if p.Name == "" {
 		return Profile{}, ErrMissingName
@@ -51,10 +56,20 @@ func Validate(p Profile) (Profile, error) {
 	if strings.HasPrefix(p.User, "-") {
 		return Profile{}, fmt.Errorf("user must not start with '-'")
 	}
-	for field, value := range map[string]string{"name": p.Name, "host": p.Host, "user": p.User, "identity_file": p.IdentityFile, "notes": p.Notes, "proxy_jump": p.ProxyJump} {
+	for field, value := range map[string]string{"name": p.Name, "host": p.Host, "user": p.User, "identity_file": p.IdentityFile, "notes": p.Notes, "proxy_jump": p.ProxyJump, "remote_command": p.RemoteCommand} {
 		if err := rejectUnsafeMetadata(field, value); err != nil {
 			return Profile{}, err
 		}
+	}
+	var err error
+	if p.LocalForwards, err = normalizeForwardList("local_forward", p.LocalForwards); err != nil {
+		return Profile{}, err
+	}
+	if p.RemoteForwards, err = normalizeForwardList("remote_forward", p.RemoteForwards); err != nil {
+		return Profile{}, err
+	}
+	if p.DynamicForwards, err = normalizeForwardList("dynamic_forward", p.DynamicForwards); err != nil {
+		return Profile{}, err
 	}
 	if p.Port == 0 {
 		p.Port = 22
@@ -88,6 +103,24 @@ func normalizeTags(tags []string) ([]string, error) {
 			return nil, fmt.Errorf("duplicate tag %q", normalized)
 		}
 		seen[key] = struct{}{}
+		out = append(out, normalized)
+	}
+	return out, nil
+}
+
+func normalizeForwardList(field string, values []string) ([]string, error) {
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		normalized := strings.TrimSpace(value)
+		if normalized == "" {
+			continue
+		}
+		if strings.HasPrefix(normalized, "-") {
+			return nil, fmt.Errorf("%s must not start with '-'", field)
+		}
+		if err := rejectUnsafeMetadata(field, normalized); err != nil {
+			return nil, err
+		}
 		out = append(out, normalized)
 	}
 	return out, nil

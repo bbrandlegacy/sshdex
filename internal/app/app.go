@@ -18,7 +18,7 @@ import (
 	"github.com/bbrandlegacy/sshdex/internal/store"
 )
 
-const Version = "0.1.0"
+const Version = "0.2.0"
 
 type options struct {
 	storePath string
@@ -99,11 +99,14 @@ func defaultStorePath() string {
 func runAdd(path string, args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("add", flag.ContinueOnError)
 	fs.SetOutput(stderr)
-	p, tags := bindProfileFlags(fs, profile.Profile{})
+	p, tags, locals, remotes, dynamics := bindProfileFlags(fs, profile.Profile{})
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
 	p.Tags = tags.Values
+	p.LocalForwards = locals.Values
+	p.RemoteForwards = remotes.Values
+	p.DynamicForwards = dynamics.Values
 	s, err := store.Load(path)
 	if err != nil {
 		fmt.Fprintln(stderr, err)
@@ -164,7 +167,7 @@ func runShow(path string, args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, err)
 		return 1
 	}
-	fmt.Fprintf(stdout, "Name: %s\nHost: %s\nUser: %s\nPort: %d\nIdentityFile: %s\nProxyJump: %s\nTags: %s\nNotes: %s\nConnectionCount: %d\n", p.Name, p.Host, p.User, p.Port, p.IdentityFile, p.ProxyJump, strings.Join(p.Tags, ","), p.Notes, p.ConnectionCount)
+	fmt.Fprintf(stdout, "Name: %s\nHost: %s\nUser: %s\nPort: %d\nIdentityFile: %s\nProxyJump: %s\nLocalForwards: %s\nRemoteForwards: %s\nDynamicForwards: %s\nRemoteCommand: %s\nTags: %s\nNotes: %s\nConnectionCount: %d\n", p.Name, p.Host, p.User, p.Port, p.IdentityFile, p.ProxyJump, strings.Join(p.LocalForwards, ","), strings.Join(p.RemoteForwards, ","), strings.Join(p.DynamicForwards, ","), p.RemoteCommand, strings.Join(p.Tags, ","), p.Notes, p.ConnectionCount)
 	return 0
 }
 
@@ -186,12 +189,21 @@ func runEdit(path string, args []string, stdout, stderr io.Writer) int {
 	}
 	fs := flag.NewFlagSet("edit", flag.ContinueOnError)
 	fs.SetOutput(stderr)
-	p, tags := bindProfileFlags(fs, existing)
+	p, tags, locals, remotes, dynamics := bindProfileFlags(fs, existing)
 	if err := fs.Parse(args[1:]); err != nil {
 		return 2
 	}
 	if tags.Seen {
 		p.Tags = tags.Values
+	}
+	if locals.Seen {
+		p.LocalForwards = locals.Values
+	}
+	if remotes.Seen {
+		p.RemoteForwards = remotes.Values
+	}
+	if dynamics.Seen {
+		p.DynamicForwards = dynamics.Values
 	}
 	p.Name = existing.Name
 	p.CreatedAt = existing.CreatedAt
@@ -413,18 +425,25 @@ type tagValues struct {
 func (t *tagValues) String() string     { return strings.Join(t.Values, ",") }
 func (t *tagValues) Set(v string) error { t.Seen = true; t.Values = append(t.Values, v); return nil }
 
-func bindProfileFlags(fs *flag.FlagSet, base profile.Profile) (*profile.Profile, *tagValues) {
+func bindProfileFlags(fs *flag.FlagSet, base profile.Profile) (*profile.Profile, *tagValues, *tagValues, *tagValues, *tagValues) {
 	p := base
 	tags := &tagValues{}
+	localForwards := &tagValues{}
+	remoteForwards := &tagValues{}
+	dynamicForwards := &tagValues{}
 	fs.StringVar(&p.Name, "name", base.Name, "profile name")
 	fs.StringVar(&p.Host, "host", base.Host, "host")
 	fs.StringVar(&p.User, "user", base.User, "user")
 	fs.IntVar(&p.Port, "port", base.Port, "port")
 	fs.StringVar(&p.IdentityFile, "identity-file", base.IdentityFile, "identity file")
 	fs.StringVar(&p.ProxyJump, "proxy-jump", base.ProxyJump, "proxy jump")
+	fs.StringVar(&p.RemoteCommand, "remote-command", base.RemoteCommand, "remote command to run after connecting")
 	fs.StringVar(&p.Notes, "notes", base.Notes, "notes")
 	fs.Var(tags, "tag", "tag; may repeat")
-	return &p, tags
+	fs.Var(localForwards, "local-forward", "local SSH forward (-L); may repeat")
+	fs.Var(remoteForwards, "remote-forward", "remote SSH forward (-R); may repeat")
+	fs.Var(dynamicForwards, "dynamic-forward", "dynamic SOCKS SSH forward (-D); may repeat")
+	return &p, tags, localForwards, remoteForwards, dynamicForwards
 }
 
 func hasTag(p profile.Profile, tag string) bool {
@@ -437,8 +456,11 @@ func hasTag(p profile.Profile, tag string) bool {
 }
 func matchesSearch(p profile.Profile, q string) bool {
 	q = strings.ToLower(q)
-	fields := []string{p.Name, p.Host, p.User, p.Notes, p.ProxyJump, strconv.Itoa(p.Port)}
+	fields := []string{p.Name, p.Host, p.User, p.Notes, p.ProxyJump, p.RemoteCommand, strconv.Itoa(p.Port)}
 	fields = append(fields, p.Tags...)
+	fields = append(fields, p.LocalForwards...)
+	fields = append(fields, p.RemoteForwards...)
+	fields = append(fields, p.DynamicForwards...)
 	for _, f := range fields {
 		if strings.Contains(strings.ToLower(f), q) {
 			return true
