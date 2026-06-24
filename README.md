@@ -17,7 +17,7 @@ Implemented capabilities:
 - Safe shell-quoted dry-run preview.
 - Interactive-first CLI CRUD: `add`, `list`, `show`, `edit`, `delete`.
 - Connect by name: `connect NAME --dry-run` and shorthand `sshdex NAME --dry-run`.
-- Search/select profile picker: `pick [--search Q] [--tag TAG] [--index N] [--dry-run]`.
+- Search/select profile picker: `pick [--interactive] [--search Q] [--tag TAG] [--index N] [--dry-run]`.
 - SSH forwarding metadata: `--local-forward`, `--remote-forward`, `--dynamic-forward`.
 - Remote command metadata: `--remote-command`.
 - `doctor` diagnostics.
@@ -118,7 +118,7 @@ sshdex delete prod-web-01 --force
 
 ### Pick/search profiles
 
-List numbered matches:
+List numbered matches (script-friendly, non-interactive output):
 
 ```bash
 sshdex pick
@@ -126,12 +126,21 @@ sshdex pick --tag prod
 sshdex pick --search web
 ```
 
-Select a numbered match and dry-run/connect it:
+Select a numbered match and dry-run/connect it non-interactively:
 
 ```bash
 sshdex pick --search web --index 1 --dry-run
 sshdex pick --tag prod --index 2
 ```
+
+Use the lightweight interactive picker when you want a keyboard-searchable prompt instead of copying an index from a separate list command:
+
+```bash
+sshdex pick --interactive --dry-run
+sshdex pick --interactive --tag prod
+```
+
+The picker prompts for a search query, prints numbered matches, then accepts a selection number. Press Enter at the selection prompt to search again, or enter `q` to cancel. `--dry-run` previews the selected SSH command; without it, the selected profile is launched with the system `ssh` binary.
 
 ### Connect / dry run
 

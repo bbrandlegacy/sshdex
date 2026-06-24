@@ -280,7 +280,7 @@ func TestCLIPickListsAndSelectsProfiles(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("pick list code=%d stdout=%q stderr=%q", code, stdout, stderr)
 	}
-	if !strings.Contains(stdout, "1\tdb\tdb.example.com") || !strings.Contains(stdout, "2\tweb\tweb.example.com") {
+	if !strings.Contains(stdout, "1	db	db.example.com") || !strings.Contains(stdout, "2	web	web.example.com") {
 		t.Fatalf("pick list stdout unexpected: %q", stdout)
 	}
 
@@ -290,6 +290,65 @@ func TestCLIPickListsAndSelectsProfiles(t *testing.T) {
 	}
 	if strings.TrimSpace(stdout) != "ssh deploy@web.example.com" {
 		t.Fatalf("pick dry-run stdout = %q", stdout)
+	}
+}
+
+func TestCLIInteractivePickSearchesAndSelectsDryRun(t *testing.T) {
+	storePath := t.TempDir() + "/profiles.json"
+	for _, args := range [][]string{
+		{"add", "--name", "web", "--host", "web.example.com", "--user", "deploy", "--tag", "prod"},
+		{"add", "--name", "db", "--host", "db.example.com", "--user", "postgres", "--tag", "prod"},
+	} {
+		if stdout, stderr, code := runCLI(t, storePath, args...); code != 0 {
+			t.Fatalf("%v code=%d stdout=%q stderr=%q", args, code, stdout, stderr)
+		}
+	}
+
+	stdout, stderr, code := runCLIWithInput(t, "web\n1\n", storePath, "pick", "--interactive", "--dry-run")
+	if code != 0 {
+		t.Fatalf("interactive pick code=%d stdout=%q stderr=%q", code, stdout, stderr)
+	}
+	for _, want := range []string{"Search:", "Matches:", "1	web	web.example.com	deploy	prod", "Select number", "ssh deploy@web.example.com"} {
+		if !strings.Contains(stdout, want) {
+			t.Fatalf("interactive pick missing %q: %q", want, stdout)
+		}
+	}
+	if strings.Contains(stdout, "db.example.com") {
+		t.Fatalf("interactive pick did not filter by search: %q", stdout)
+	}
+}
+
+func TestCLIInteractivePickRedactsSearchDefault(t *testing.T) {
+	const sentinel = "SSHDX_TEST_SECRET_DO_NOT_PRINT_PICK"
+	storePath := t.TempDir() + "/profiles.json"
+	stdout, stderr, _ := runCLIWithInput(t, "", storePath, "pick", "--interactive", "--dry-run", "--search", sentinel)
+	if strings.Contains(stdout+stderr, sentinel) {
+		t.Fatalf("interactive pick leaked search default: stdout=%q stderr=%q", stdout, stderr)
+	}
+	if !strings.Contains(stdout, "Search [[REDACTED]]:") {
+		t.Fatalf("interactive pick did not redact prompt default: %q", stdout)
+	}
+}
+
+func TestCLIInteractivePickCanSearchAgainAfterInvalidSelection(t *testing.T) {
+	storePath := t.TempDir() + "/profiles.json"
+	for _, args := range [][]string{
+		{"add", "--name", "web", "--host", "web.example.com", "--user", "deploy", "--tag", "prod"},
+		{"add", "--name", "db", "--host", "db.example.com", "--user", "postgres", "--tag", "prod"},
+	} {
+		if stdout, stderr, code := runCLI(t, storePath, args...); code != 0 {
+			t.Fatalf("%v code=%d stdout=%q stderr=%q", args, code, stdout, stderr)
+		}
+	}
+
+	stdout, stderr, code := runCLIWithInput(t, "nope\nweb\n99\n\n1\n", storePath, "pick", "--interactive", "--dry-run")
+	if code != 0 {
+		t.Fatalf("interactive pick retry code=%d stdout=%q stderr=%q", code, stdout, stderr)
+	}
+	for _, want := range []string{"No matches for \"nope\"", "Invalid selection \"99\"", "ssh deploy@web.example.com"} {
+		if !strings.Contains(stdout, want) {
+			t.Fatalf("interactive pick retry missing %q: %q", want, stdout)
+		}
 	}
 }
 
@@ -590,7 +649,7 @@ func TestHelpMentionsV01Commands(t *testing.T) {
 		t.Fatalf("help code=%d stderr=%q", code, stderr.String())
 	}
 	text := stdout.String()
-	for _, want := range []string{"add", "list", "show", "edit", "delete", "connect", "pick", "import", "export", "backup", "completion", "doctor", "--store PATH"} {
+	for _, want := range []string{"add", "list", "show", "edit", "delete", "connect", "pick", "import", "export", "backup", "completion", "doctor", "--interactive", "--store PATH"} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("help missing %q: %s", want, text)
 		}

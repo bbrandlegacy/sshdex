@@ -366,6 +366,7 @@ func runPick(path string, args []string, stdout, stderr io.Writer) int {
 	tag := fs.String("tag", "", "filter by tag")
 	search := fs.String("search", "", "search name/host/tag")
 	index := fs.Int("index", 0, "1-based selected profile index")
+	interactive := fs.Bool("interactive", false, "prompt to search and select a profile")
 	dryRun := fs.Bool("dry-run", false, "print safe SSH preview instead of launching ssh")
 	if err := fs.Parse(args); err != nil {
 		return 2
@@ -375,29 +376,100 @@ func runPick(path string, args []string, stdout, stderr io.Writer) int {
 		printError(stderr, err)
 		return 1
 	}
-	matches := []profile.Profile{}
-	for _, p := range s.List() {
-		if *tag != "" && !hasTag(p, *tag) {
-			continue
-		}
-		if *search != "" && !matchesSearch(p, *search) {
-			continue
-		}
-		matches = append(matches, p)
-	}
+	profiles := s.List()
+	matches := pickMatches(profiles, *tag, *search)
 	if *index == 0 {
-		for i, p := range matches {
-			fmt.Fprintf(stdout, "%d	%s	%s	%s	%s\n", i+1, safeText(p.Name), safeText(p.Host), safeText(p.User), safeJoin(p.Tags, ","))
+		if *interactive {
+			return runInteractivePick(path, profiles, *tag, *search, *dryRun, os.Stdin, stdout, stderr)
 		}
+		printPickMatches(stdout, matches)
 		return 0
 	}
 	if *index < 1 || *index > len(matches) {
 		fmt.Fprintf(stderr, "pick index %d out of range for %d match(es)\n", *index, len(matches))
 		return 2
 	}
-	selected := matches[*index-1]
+	return connectPickedProfile(path, matches[*index-1], *dryRun, stdout, stderr)
+}
+
+func pickMatches(profiles []profile.Profile, tag, search string) []profile.Profile {
+	matches := []profile.Profile{}
+	for _, p := range profiles {
+		if tag != "" && !hasTag(p, tag) {
+			continue
+		}
+		if search != "" && !matchesSearch(p, search) {
+			continue
+		}
+		matches = append(matches, p)
+	}
+	return matches
+}
+
+func printPickMatches(stdout io.Writer, matches []profile.Profile) {
+	for i, p := range matches {
+		fmt.Fprintf(stdout, "%d	%s	%s	%s	%s\n", i+1, safeText(p.Name), safeText(p.Host), safeText(p.User), safeJoin(p.Tags, ","))
+	}
+}
+
+func runInteractivePick(path string, profiles []profile.Profile, tag, search string, dryRun bool, stdin *os.File, stdout, stderr io.Writer) int {
+	reader := bufio.NewReader(stdin)
+	query := search
+	for {
+		entered, eof, err := promptLineEOF(stdout, reader, "Search", query)
+		if err != nil {
+			printError(stderr, err)
+			return 1
+		}
+		if eof && entered == "" && query == "" {
+			fmt.Fprintln(stdout, "cancelled")
+			return 0
+		}
+		query = entered
+		matches := pickMatches(profiles, tag, query)
+		if len(matches) == 0 {
+			fmt.Fprintf(stdout, "No matches for %q. Try another search or press Ctrl+D to cancel.\n", safeText(query))
+			if eof {
+				return 1
+			}
+			query = ""
+			continue
+		}
+
+		fmt.Fprintln(stdout, "Matches:")
+		printPickMatches(stdout, matches)
+		choice, eof, err := promptLineEOF(stdout, reader, "Select number (blank to search again, q to cancel)", "")
+		if err != nil {
+			printError(stderr, err)
+			return 1
+		}
+		choice = strings.TrimSpace(choice)
+		if choice == "" {
+			if eof {
+				fmt.Fprintln(stdout, "cancelled")
+				return 0
+			}
+			continue
+		}
+		if strings.EqualFold(choice, "q") || strings.EqualFold(choice, "quit") {
+			fmt.Fprintln(stdout, "cancelled")
+			return 0
+		}
+		n, err := strconv.Atoi(choice)
+		if err != nil || n < 1 || n > len(matches) {
+			fmt.Fprintf(stdout, "Invalid selection %q; enter 1-%d, blank to search again, or q to cancel.\n", safeText(choice), len(matches))
+			if eof {
+				return 2
+			}
+			continue
+		}
+		return connectPickedProfile(path, matches[n-1], dryRun, stdout, stderr)
+	}
+}
+
+func connectPickedProfile(path string, selected profile.Profile, dryRun bool, stdout, stderr io.Writer) int {
 	connectArgs := []string{selected.Name}
-	if *dryRun {
+	if dryRun {
 		connectArgs = append(connectArgs, "--dry-run")
 	}
 	return runConnect(path, connectArgs, stdout, stderr)
@@ -804,20 +876,26 @@ func promptProfile(stdout io.Writer, stdin *os.File, base profile.Profile, requi
 }
 
 func promptLine(stdout io.Writer, reader *bufio.Reader, label, defaultValue string) (string, error) {
+	value, _, err := promptLineEOF(stdout, reader, label, defaultValue)
+	return value, err
+}
+
+func promptLineEOF(stdout io.Writer, reader *bufio.Reader, label, defaultValue string) (string, bool, error) {
 	if defaultValue == "" {
 		fmt.Fprintf(stdout, "%s: ", label)
 	} else {
-		fmt.Fprintf(stdout, "%s [%s]: ", label, defaultValue)
+		fmt.Fprintf(stdout, "%s [%s]: ", label, safeText(defaultValue))
 	}
 	line, err := reader.ReadString('\n')
 	if err != nil && !errors.Is(err, io.EOF) {
-		return "", err
+		return "", false, err
 	}
+	eof := errors.Is(err, io.EOF)
 	line = strings.TrimSpace(line)
 	if line == "" {
-		return defaultValue, nil
+		return defaultValue, eof, nil
 	}
-	return line, nil
+	return line, eof, nil
 }
 
 func splitCSV(s string) []string {
@@ -1059,6 +1137,13 @@ Commands:
   completion  Print shell completion script
   doctor   Show setup diagnostics
   version  Show version
+
+Pick flags:
+  --interactive                  Prompt for search text and selection number
+  --search Q                     Filter by name, host, user, notes, tag, or SSH metadata
+  --tag TAG                      Filter by tag
+  --index N                      Select the 1-based match number non-interactively
+  --dry-run                      Preview selected SSH command without launching ssh
 
 Import flags:
   --format openssh|sshdex       Input format (default openssh)
