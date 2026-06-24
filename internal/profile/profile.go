@@ -3,8 +3,10 @@ package profile
 import (
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/bbrandlegacy/sshdex/internal/security"
 )
@@ -125,9 +127,194 @@ func normalizeForwardList(field string, values []string) ([]string, error) {
 		if err := rejectUnsafeMetadata(field, normalized); err != nil {
 			return nil, err
 		}
+		if err := validateForwardSyntax(field, normalized); err != nil {
+			return nil, err
+		}
 		out = append(out, normalized)
 	}
 	return out, nil
+}
+
+func validateForwardSyntax(field, value string) error {
+	switch field {
+	case "local_forward", "remote_forward":
+		return validateLocalOrRemoteForward(field, value)
+	case "dynamic_forward":
+		return validateDynamicForward(field, value)
+	default:
+		return nil
+	}
+}
+
+func validateLocalOrRemoteForward(field, value string) error {
+	parts, err := splitForwardFields(value)
+	if err != nil {
+		return fmt.Errorf("%s has invalid syntax; want [bind_address:]port:host:hostport", field)
+	}
+
+	allowZeroListen := field == "remote_forward"
+	switch len(parts) {
+	case 2:
+		listenPort, socketPath := parts[0], parts[1]
+		if err := validateForwardPortRange(field, "listen", listenPort, allowZeroListen); err != nil {
+			return err
+		}
+		return validateForwardSocketPath(field, "target socket", socketPath)
+	case 3:
+		if looksLikeSocketPath(parts[0]) {
+			if err := validateForwardSocketPath(field, "listen socket", parts[0]); err != nil {
+				return err
+			}
+			if err := validateForwardEndpoint(field, "host", parts[1], true); err != nil {
+				return err
+			}
+			return validateForwardPort(field, "host", parts[2])
+		}
+		listenPort, host, hostPort := parts[0], parts[1], parts[2]
+		if err := validateForwardPortRange(field, "listen", listenPort, allowZeroListen); err != nil {
+			return err
+		}
+		if err := validateForwardEndpoint(field, "host", host, true); err != nil {
+			return err
+		}
+		return validateForwardPort(field, "host", hostPort)
+	case 4:
+		bind, listenPort, host, hostPort := parts[0], parts[1], parts[2], parts[3]
+		if err := validateForwardEndpoint(field, "bind address", bind, false); err != nil {
+			return err
+		}
+		if err := validateForwardPortRange(field, "listen", listenPort, allowZeroListen); err != nil {
+			return err
+		}
+		if err := validateForwardEndpoint(field, "host", host, true); err != nil {
+			return err
+		}
+		return validateForwardPort(field, "host", hostPort)
+	default:
+		return fmt.Errorf("%s has invalid syntax; want [bind_address:]port:host:hostport", field)
+	}
+}
+
+func validateDynamicForward(field, value string) error {
+	parts, err := splitForwardFields(value)
+	if err != nil {
+		return fmt.Errorf("%s has invalid syntax; want [bind_address:]port", field)
+	}
+
+	var bind, listenPort string
+	switch len(parts) {
+	case 1:
+		listenPort = parts[0]
+	case 2:
+		bind, listenPort = parts[0], parts[1]
+		if err := validateForwardEndpoint(field, "bind address", bind, false); err != nil {
+			return err
+		}
+	default:
+		return fmt.Errorf("%s has invalid syntax; want [bind_address:]port", field)
+	}
+	return validateForwardPort(field, "listen", listenPort)
+}
+
+func splitForwardFields(value string) ([]string, error) {
+	fields := []string{}
+	start := 0
+	inBracket := false
+	for i := 0; i < len(value); i++ {
+		switch value[i] {
+		case '[':
+			if inBracket {
+				return nil, fmt.Errorf("nested bracket")
+			}
+			inBracket = true
+		case ']':
+			if !inBracket {
+				return nil, fmt.Errorf("unmatched bracket")
+			}
+			inBracket = false
+		case ':':
+			if !inBracket {
+				fields = append(fields, value[start:i])
+				start = i + 1
+			}
+		}
+	}
+	if inBracket {
+		return nil, fmt.Errorf("unmatched bracket")
+	}
+	fields = append(fields, value[start:])
+	return fields, nil
+}
+
+func validateForwardPort(field, role, value string) error {
+	return validateForwardPortRange(field, role, value, false)
+}
+
+func validateForwardPortRange(field, role, value string, allowZero bool) error {
+	if value == "" {
+		return fmt.Errorf("%s %s port is required", field, role)
+	}
+	for _, r := range value {
+		if r < '0' || r > '9' {
+			return fmt.Errorf("%s %s port must be numeric and between %d and 65535", field, role, minForwardPort(allowZero))
+		}
+	}
+	port, err := strconv.Atoi(value)
+	if err != nil || port < minForwardPort(allowZero) || port > 65535 {
+		return fmt.Errorf("%s %s port must be numeric and between %d and 65535", field, role, minForwardPort(allowZero))
+	}
+	return nil
+}
+
+func minForwardPort(allowZero bool) int {
+	if allowZero {
+		return 0
+	}
+	return 1
+}
+
+func looksLikeSocketPath(value string) bool {
+	return strings.HasPrefix(value, "/")
+}
+
+func validateForwardSocketPath(field, role, value string) error {
+	if value == "" {
+		return fmt.Errorf("%s %s is required", field, role)
+	}
+	if hasWhitespace(value) {
+		return fmt.Errorf("%s %s must not contain whitespace", field, role)
+	}
+	if !looksLikeSocketPath(value) {
+		return fmt.Errorf("%s %s must be an absolute path", field, role)
+	}
+	return nil
+}
+
+func validateForwardEndpoint(field, role, value string, required bool) error {
+	if value == "" {
+		if required {
+			return fmt.Errorf("%s %s is required", field, role)
+		}
+		return nil
+	}
+	if hasWhitespace(value) {
+		return fmt.Errorf("%s %s must not contain whitespace", field, role)
+	}
+	if strings.HasPrefix(value, "[") || strings.HasSuffix(value, "]") {
+		if len(value) < 3 || !strings.HasPrefix(value, "[") || !strings.HasSuffix(value, "]") || value[1:len(value)-1] == "" {
+			return fmt.Errorf("%s %s has invalid bracket syntax", field, role)
+		}
+	}
+	return nil
+}
+
+func hasWhitespace(value string) bool {
+	for _, r := range value {
+		if unicode.IsSpace(r) {
+			return true
+		}
+	}
+	return false
 }
 
 func rejectUnsafeMetadata(field, value string) error {
