@@ -45,10 +45,10 @@ func Load(path string) (*Store, error) {
 	for _, p := range disk.Profiles {
 		normalized, err := profile.Validate(p)
 		if err != nil {
-			return nil, fmt.Errorf("invalid stored profile %q: %w", p.Name, err)
+			return nil, fmt.Errorf("invalid stored profile: %w", err)
 		}
 		if _, exists := s.profiles[normalized.Name]; exists {
-			return nil, fmt.Errorf("duplicate stored profile %q", normalized.Name)
+			return nil, fmt.Errorf("duplicate stored profile")
 		}
 		s.profiles[normalized.Name] = normalized
 	}
@@ -89,13 +89,63 @@ func (s *Store) Save() error {
 	return nil
 }
 
+type SecurityDiagnostic struct {
+	Severity string
+	Path     string
+	Message  string
+	Fix      string
+}
+
+func SecurityDiagnostics(path string) []SecurityDiagnostic {
+	var diagnostics []SecurityDiagnostic
+	dir := filepath.Dir(path)
+	if info, err := os.Lstat(dir); err == nil {
+		if info.Mode()&os.ModeSymlink != 0 {
+			diagnostics = append(diagnostics, SecurityDiagnostic{
+				Severity: "warning",
+				Path:     dir,
+				Message:  "store parent is a symlink",
+				Fix:      "use a real directory owned by you with mode 0700",
+			})
+		} else if info.IsDir() && info.Mode().Perm()&0o077 != 0 {
+			diagnostics = append(diagnostics, SecurityDiagnostic{
+				Severity: "warning",
+				Path:     dir,
+				Message:  fmt.Sprintf("store parent permissions are too open: %04o", info.Mode().Perm()),
+				Fix:      "chmod 700 " + dir,
+			})
+		}
+	}
+
+	if info, err := os.Lstat(path); err == nil {
+		if info.Mode()&os.ModeSymlink != 0 {
+			diagnostics = append(diagnostics, SecurityDiagnostic{
+				Severity: "warning",
+				Path:     path,
+				Message:  "store path is a symlink",
+				Fix:      "replace it with a regular file with mode 0600",
+			})
+			return diagnostics
+		}
+		if info.Mode().IsRegular() && info.Mode().Perm()&0o077 != 0 {
+			diagnostics = append(diagnostics, SecurityDiagnostic{
+				Severity: "warning",
+				Path:     path,
+				Message:  fmt.Sprintf("store file permissions are too open: %04o", info.Mode().Perm()),
+				Fix:      "chmod 600 " + path,
+			})
+		}
+	}
+	return diagnostics
+}
+
 func (s *Store) Add(p profile.Profile) error {
 	normalized, err := profile.Validate(p)
 	if err != nil {
 		return err
 	}
 	if _, exists := s.profiles[normalized.Name]; exists {
-		return fmt.Errorf("%w: %s", ErrProfileExists, normalized.Name)
+		return fmt.Errorf("%w", ErrProfileExists)
 	}
 	s.profiles[normalized.Name] = normalized
 	return nil
@@ -107,7 +157,7 @@ func (s *Store) Update(p profile.Profile) error {
 		return err
 	}
 	if _, exists := s.profiles[normalized.Name]; !exists {
-		return fmt.Errorf("%w: %s", ErrProfileNotFound, normalized.Name)
+		return fmt.Errorf("%w", ErrProfileNotFound)
 	}
 	s.profiles[normalized.Name] = normalized
 	return nil
@@ -116,7 +166,7 @@ func (s *Store) Update(p profile.Profile) error {
 func (s *Store) Delete(name string) error {
 	name = strings.TrimSpace(name)
 	if _, exists := s.profiles[name]; !exists {
-		return fmt.Errorf("%w: %s", ErrProfileNotFound, name)
+		return fmt.Errorf("%w", ErrProfileNotFound)
 	}
 	delete(s.profiles, name)
 	return nil
@@ -126,7 +176,7 @@ func (s *Store) Get(name string) (profile.Profile, error) {
 	name = strings.TrimSpace(name)
 	p, exists := s.profiles[name]
 	if !exists {
-		return profile.Profile{}, fmt.Errorf("%w: %s", ErrProfileNotFound, name)
+		return profile.Profile{}, fmt.Errorf("%w", ErrProfileNotFound)
 	}
 	return p, nil
 }

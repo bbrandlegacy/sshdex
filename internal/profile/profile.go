@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/bbrandlegacy/sshdex/internal/security"
 )
 
 // Profile describes a saved SSH target. v0.1 stores metadata only: no
@@ -50,11 +52,10 @@ func Validate(p Profile) (Profile, error) {
 	if p.Host == "" {
 		return Profile{}, ErrMissingHost
 	}
-	if strings.HasPrefix(p.Host, "-") {
-		return Profile{}, fmt.Errorf("host must not start with '-'")
-	}
-	if strings.HasPrefix(p.User, "-") {
-		return Profile{}, fmt.Errorf("user must not start with '-'")
+	for field, value := range map[string]string{"name": p.Name, "host": p.Host, "user": p.User, "identity_file": p.IdentityFile, "proxy_jump": p.ProxyJump, "remote_command": p.RemoteCommand} {
+		if err := security.RejectOptionLike(field, value); err != nil {
+			return Profile{}, err
+		}
 	}
 	for field, value := range map[string]string{"name": p.Name, "host": p.Host, "user": p.User, "identity_file": p.IdentityFile, "notes": p.Notes, "proxy_jump": p.ProxyJump, "remote_command": p.RemoteCommand} {
 		if err := rejectUnsafeMetadata(field, value); err != nil {
@@ -95,6 +96,9 @@ func normalizeTags(tags []string) ([]string, error) {
 		if normalized == "" {
 			continue
 		}
+		if err := security.RejectOptionLike("tag", normalized); err != nil {
+			return nil, err
+		}
 		if err := rejectUnsafeMetadata("tag", normalized); err != nil {
 			return nil, err
 		}
@@ -115,8 +119,8 @@ func normalizeForwardList(field string, values []string) ([]string, error) {
 		if normalized == "" {
 			continue
 		}
-		if strings.HasPrefix(normalized, "-") {
-			return nil, fmt.Errorf("%s must not start with '-'", field)
+		if err := security.RejectOptionLike(field, normalized); err != nil {
+			return nil, err
 		}
 		if err := rejectUnsafeMetadata(field, normalized); err != nil {
 			return nil, err
@@ -127,14 +131,5 @@ func normalizeForwardList(field string, values []string) ([]string, error) {
 }
 
 func rejectUnsafeMetadata(field, value string) error {
-	for _, r := range value {
-		if r < 0x20 || r == 0x7f {
-			return fmt.Errorf("%s contains control characters", field)
-		}
-	}
-	upper := strings.ToUpper(value)
-	if strings.Contains(upper, "-----BEGIN") && strings.Contains(upper, "PRIVATE KEY-----") {
-		return fmt.Errorf("%s appears to contain private key material", field)
-	}
-	return nil
+	return security.ValidateMetadata(field, value)
 }

@@ -3,6 +3,8 @@ package app
 import (
 	"bytes"
 	"os"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -384,8 +386,156 @@ func TestHelpMentionsV01Commands(t *testing.T) {
 	}
 }
 
+func TestCLIDoesNotLeakProtectedSentinelInOutputsOrErrors(t *testing.T) {
+	const sentinel = "SSHDX_TEST_SECRET_DO_NOT_PRINT_12345"
+	dir := t.TempDir()
+	storePath := filepath.Join(dir, "profiles.json")
+	unsafeStore := `{"profiles":[{"name":"prod","host":"example.com","notes":"` + sentinel + `"}]}`
+	if err := os.WriteFile(storePath, []byte(unsafeStore), 0o600); err != nil {
+		t.Fatalf("write unsafe store: %v", err)
+	}
+	commands := [][]string{
+		{"list"},
+		{"show", "prod"},
+		{"connect", "prod", "--dry-run"},
+		{"export", filepath.Join(dir, "export.json")},
+		{"backup", filepath.Join(dir, "backup.json")},
+		{"doctor"},
+	}
+	for _, args := range commands {
+		stdout, stderr, _ := runCLI(t, storePath, args...)
+		assertNoLeak(t, sentinel, stdout, stderr)
+	}
+
+	stdout, stderr, _ := runCLI(t, filepath.Join(dir, "clean.json"), "add", "--name", "bad", "--host", "example.com", "--notes", sentinel)
+	assertNoLeak(t, sentinel, stdout, stderr)
+
+	stdout, stderr, _ = runCLI(t, filepath.Join(dir, "clean.json"), "completion", sentinel)
+	assertNoLeak(t, sentinel, stdout, stderr)
+
+	_, _, code := runCLI(t, filepath.Join(dir, "clean.json"), "add", "--name", "prod", "--host", "example.com")
+	if code != 0 {
+		t.Fatalf("seed valid profile code=%d", code)
+	}
+	for _, args := range [][]string{
+		{"export", filepath.Join(dir, sentinel+"-export.json")},
+		{"backup", filepath.Join(dir, sentinel+"-backup.json")},
+		{"doctor"},
+	} {
+		stdout, stderr, _ = runCLI(t, filepath.Join(dir, "clean.json"), args...)
+		assertNoLeak(t, sentinel, stdout, stderr)
+	}
+}
+
+func TestDoctorReportsUnsafeStorePermissionsWithoutProfileContents(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX mode assertions are not portable on Windows")
+	}
+	dir := filepath.Join(t.TempDir(), "open")
+	if err := os.Mkdir(dir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	storePath := filepath.Join(dir, "profiles.json")
+	_, _, code := runCLI(t, storePath, "add", "--name", "prod", "--host", "sensitive-host.example", "--identity-file", "/tmp/sshdex-sensitive-missing-key")
+	if code != 0 {
+		t.Fatalf("seed add code=%d", code)
+	}
+	if err := os.Chmod(storePath, 0o644); err != nil {
+		t.Fatalf("chmod store: %v", err)
+	}
+
+	stdout, stderr, code := runCLI(t, storePath, "doctor")
+	if code != 0 {
+		t.Fatalf("doctor code=%d stderr=%q", code, stderr)
+	}
+	for _, want := range []string{"StoreSecurityFindings:", "store parent permissions are too open", "store file permissions are too open", "chmod 700", "chmod 600"} {
+		if !strings.Contains(stdout, want) {
+			t.Fatalf("doctor missing %q: %q", want, stdout)
+		}
+	}
+	for _, leaked := range []string{"sensitive-host.example", "prod", "/tmp/sshdex-sensitive-missing-key"} {
+		if strings.Contains(stdout, leaked) {
+			t.Fatalf("doctor leaked stored profile content %q while reporting permissions: %q", leaked, stdout)
+		}
+	}
+}
+
+func TestDoctorReportsStoreSymlink(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink setup is not portable on Windows")
+	}
+	dir := t.TempDir()
+	target := filepath.Join(dir, "target.json")
+	_, _, code := runCLI(t, target, "add", "--name", "prod", "--host", "example.com")
+	if code != 0 {
+		t.Fatalf("seed add code=%d", code)
+	}
+	link := filepath.Join(dir, "profiles-link.json")
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatalf("symlink: %v", err)
+	}
+
+	stdout, stderr, code := runCLI(t, link, "doctor")
+	if code != 0 {
+		t.Fatalf("doctor symlink code=%d stderr=%q", code, stderr)
+	}
+	if !strings.Contains(stdout, "store path is a symlink") || !strings.Contains(stdout, "replace it with a regular file") {
+		t.Fatalf("doctor symlink output unexpected: %q", stdout)
+	}
+}
+
+func TestExportAndBackupCreatePrivateFilesAndDirs(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX mode assertions are not portable on Windows")
+	}
+	dir := t.TempDir()
+	storePath := filepath.Join(dir, "profiles.json")
+	_, _, code := runCLI(t, storePath, "add", "--name", "prod", "--host", "example.com", "--user", "deploy")
+	if code != 0 {
+		t.Fatalf("seed add code=%d", code)
+	}
+	for _, dest := range []string{filepath.Join(dir, "nested-export", "profiles.json"), filepath.Join(dir, "nested-backup", "profiles.json")} {
+		cmd := "export"
+		if strings.Contains(dest, "backup") {
+			cmd = "backup"
+		}
+		stdout, stderr, code := runCLI(t, storePath, cmd, dest)
+		if code != 0 {
+			t.Fatalf("%s code=%d stdout=%q stderr=%q", cmd, code, stdout, stderr)
+		}
+		info, err := os.Stat(dest)
+		if err != nil {
+			t.Fatalf("stat %s: %v", dest, err)
+		}
+		if got := info.Mode().Perm(); got != 0o600 {
+			t.Fatalf("%s mode = %04o, want 0600", dest, got)
+		}
+		dirInfo, err := os.Stat(filepath.Dir(dest))
+		if err != nil {
+			t.Fatalf("stat dir %s: %v", filepath.Dir(dest), err)
+		}
+		if got := dirInfo.Mode().Perm(); got != 0o700 {
+			t.Fatalf("%s dir mode = %04o, want 0700", dest, got)
+		}
+	}
+}
+
+func assertNoLeak(t *testing.T, sentinel, stdout, stderr string) {
+	t.Helper()
+	combined := stdout + stderr
+	if strings.Contains(combined, sentinel) {
+		t.Fatalf("output leaked sentinel %q\nstdout=%q\nstderr=%q", sentinel, stdout, stderr)
+	}
+}
+
 func TestDoctorReportsMissingIdentityFile(t *testing.T) {
-	storePath := t.TempDir() + "/profiles.json"
+	dir := t.TempDir()
+	if runtime.GOOS != "windows" {
+		if err := os.Chmod(dir, 0o700); err != nil {
+			t.Fatalf("chmod temp dir: %v", err)
+		}
+	}
+	storePath := dir + "/profiles.json"
 	_, stderr, code := runCLI(t, storePath, "add", "--name", "bad", "--host", "example.com", "--identity-file", "/tmp/sshdex-definitely-missing-key")
 	if code != 0 {
 		t.Fatalf("add code=%d stderr=%q", code, stderr)
