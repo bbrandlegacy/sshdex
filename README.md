@@ -21,7 +21,7 @@ Implemented capabilities:
 - SSH forwarding metadata: `--local-forward`, `--remote-forward`, `--dynamic-forward`.
 - Remote command metadata: `--remote-command`.
 - `doctor` diagnostics.
-- Import from OpenSSH config: `import [PATH] [--dry-run]`.
+- Import from OpenSSH config or sshdex JSON: `import [PATH] [--format openssh|sshdex] [--conflict skip|replace|rename] [--dry-run]`.
 - Export/backup profile JSON: `export [PATH]`, `backup [PATH]`.
 - Shell completions: `completion bash|zsh|fish`.
 
@@ -149,13 +149,14 @@ sshdex connect prod-web-01
 sshdex prod-web-01
 ```
 
-### Import from SSH config
+### Import from OpenSSH config or sshdex JSON
 
 Preview importable entries:
 
 ```bash
 sshdex import --dry-run
 sshdex import ~/.ssh/config --dry-run
+sshdex import --format sshdex ./sshdex-profiles.json --dry-run
 ```
 
 Import entries:
@@ -163,9 +164,20 @@ Import entries:
 ```bash
 sshdex import
 sshdex import ~/.ssh/config
+sshdex import --format sshdex ./sshdex-profiles.json
 ```
 
-When no path is provided, `import` prompts for the SSH config path. Import reads the source SSH config and never overwrites it. Duplicate profile names are skipped.
+When no path is provided, `import` prompts for the import path. The default format is `openssh`; use `--format sshdex` to restore the JSON produced by `export` or `backup`. Import reads the source file and never overwrites it.
+
+Duplicate profile names are non-destructive by default and skipped. Choose an explicit conflict policy when restoring JSON:
+
+```bash
+sshdex import --format sshdex --conflict skip ./sshdex-profiles.json     # default
+sshdex import --format sshdex --conflict replace ./sshdex-profiles.json  # overwrite matching names
+sshdex import --format sshdex --conflict rename ./sshdex-profiles.json   # import as name-1, name-2, ...
+```
+
+`--dry-run` prints the planned action for each profile and does not write the store.
 
 Supported imported directives in v0.1:
 

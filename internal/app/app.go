@@ -462,69 +462,280 @@ func expandHome(path string) string {
 }
 
 func runImport(path string, args []string, stdout, stderr io.Writer) int {
-	dryRun := false
-	files := []string{}
-	for _, arg := range args {
-		switch arg {
-		case "--dry-run":
-			dryRun = true
-		default:
-			files = append(files, arg)
-		}
+	opts, err := parseImportArgs(args)
+	if err != nil {
+		fmt.Fprintln(stderr, safeText(err.Error()))
+		return 2
 	}
-	if len(files) == 0 {
-		inputPath, err := promptLine(stdout, bufio.NewReader(os.Stdin), "SSH config path", "")
+	if opts.path == "" {
+		label := "SSH config path"
+		if opts.format == importFormatSSHDex {
+			label = "sshdex JSON path"
+		}
+		inputPath, err := promptLine(stdout, bufio.NewReader(os.Stdin), label, "")
 		if err != nil {
 			printError(stderr, err)
 			return 1
 		}
 		if strings.TrimSpace(inputPath) != "" {
-			files = append(files, inputPath)
+			opts.path = inputPath
 		}
 	}
-	if len(files) != 1 {
+	if opts.path == "" {
 		fmt.Fprintln(stderr, "import requires PATH")
 		return 2
 	}
-	data, err := os.ReadFile(files[0])
+	data, err := os.ReadFile(opts.path)
 	if err != nil {
 		printError(stderr, err)
 		return 1
 	}
-	profiles, err := sshconfig.ParseString(string(data))
+	profiles, err := parseImportProfiles(data, opts.format)
 	if err != nil {
 		printError(stderr, err)
 		return 1
-	}
-	if dryRun {
-		for _, p := range profiles {
-			fmt.Fprintf(stdout, "%s	%s	%s\n", safeText(p.Name), safeText(p.Host), safeText(p.User))
-		}
-		return 0
 	}
 	s, err := store.Load(path)
 	if err != nil {
 		printError(stderr, err)
 		return 1
 	}
-	imported, skipped := 0, 0
-	for _, p := range profiles {
-		if err := s.Add(p); err != nil {
-			if errors.Is(err, store.ErrProfileExists) {
-				skipped++
-				continue
-			}
-			printError(stderr, err)
-			return 1
-		}
-		imported++
-	}
-	if err := s.Save(); err != nil {
+	plan, summary, err := planProfileImport(s, profiles, opts.conflict)
+	if err != nil {
 		printError(stderr, err)
 		return 1
 	}
-	fmt.Fprintf(stdout, "imported %d profile(s), skipped %d duplicate(s)\n", imported, skipped)
+	if opts.dryRun {
+		for _, item := range plan {
+			fmt.Fprintf(stdout, "%s	%s	%s	%s\n", safeText(item.Profile.Name), safeText(item.Profile.Host), safeText(item.Profile.User), safeText(item.Description()))
+		}
+		fmt.Fprintf(stdout, "dry-run: would import %d profile(s), replace %d, rename %d, skip %d duplicate(s)\n", summary.Imported, summary.Replaced, summary.Renamed, summary.Skipped)
+		return 0
+	}
+	if err := applyProfileImport(s, plan); err != nil {
+		printError(stderr, err)
+		return 1
+	}
+	if summary.Imported > 0 || summary.Replaced > 0 {
+		if err := s.Save(); err != nil {
+			printError(stderr, err)
+			return 1
+		}
+	}
+	fmt.Fprintf(stdout, "imported %d profile(s), replaced %d, renamed %d, skipped %d duplicate(s)\n", summary.Imported, summary.Replaced, summary.Renamed, summary.Skipped)
 	return 0
+}
+
+type importFormat string
+
+const (
+	importFormatOpenSSH importFormat = "openssh"
+	importFormatSSHDex  importFormat = "sshdex"
+)
+
+type conflictPolicy string
+
+const (
+	conflictSkip    conflictPolicy = "skip"
+	conflictReplace conflictPolicy = "replace"
+	conflictRename  conflictPolicy = "rename"
+)
+
+type importOptions struct {
+	dryRun   bool
+	format   importFormat
+	conflict conflictPolicy
+	path     string
+}
+
+func parseImportArgs(args []string) (importOptions, error) {
+	opts := importOptions{format: importFormatOpenSSH, conflict: conflictSkip}
+	paths := []string{}
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		switch {
+		case arg == "--dry-run":
+			opts.dryRun = true
+		case arg == "--format":
+			if i+1 >= len(args) {
+				return opts, fmt.Errorf("--format requires openssh or sshdex")
+			}
+			opts.format = importFormat(args[i+1])
+			i++
+		case strings.HasPrefix(arg, "--format="):
+			opts.format = importFormat(strings.TrimPrefix(arg, "--format="))
+		case arg == "--conflict":
+			if i+1 >= len(args) {
+				return opts, fmt.Errorf("--conflict requires skip, replace, or rename")
+			}
+			opts.conflict = conflictPolicy(args[i+1])
+			i++
+		case strings.HasPrefix(arg, "--conflict="):
+			opts.conflict = conflictPolicy(strings.TrimPrefix(arg, "--conflict="))
+		case strings.HasPrefix(arg, "-"):
+			return opts, fmt.Errorf("unknown import flag %s", arg)
+		default:
+			paths = append(paths, arg)
+		}
+	}
+	if opts.format != importFormatOpenSSH && opts.format != importFormatSSHDex {
+		return opts, fmt.Errorf("unsupported import format %s", opts.format)
+	}
+	if opts.conflict != conflictSkip && opts.conflict != conflictReplace && opts.conflict != conflictRename {
+		return opts, fmt.Errorf("unsupported conflict policy %s", opts.conflict)
+	}
+	if len(paths) > 1 {
+		return opts, fmt.Errorf("import requires PATH")
+	}
+	if len(paths) == 1 {
+		opts.path = paths[0]
+	}
+	return opts, nil
+}
+
+func parseImportProfiles(data []byte, format importFormat) ([]profile.Profile, error) {
+	switch format {
+	case importFormatOpenSSH:
+		return sshconfig.ParseString(string(data))
+	case importFormatSSHDex:
+		profiles, err := readProfilesData(data)
+		if err != nil {
+			return nil, err
+		}
+		out := make([]profile.Profile, 0, len(profiles))
+		for _, p := range profiles {
+			normalized, err := profile.Validate(p)
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, normalized)
+		}
+		return out, nil
+	default:
+		return nil, fmt.Errorf("unsupported import format %s", format)
+	}
+}
+
+func readProfilesData(data []byte) ([]profile.Profile, error) {
+	trimmed := strings.TrimSpace(string(data))
+	if strings.HasPrefix(trimmed, "[") {
+		var profiles []profile.Profile
+		if err := json.Unmarshal(data, &profiles); err != nil {
+			return nil, err
+		}
+		return profiles, nil
+	}
+	var exported exportedProfiles
+	if err := json.Unmarshal(data, &exported); err != nil {
+		return nil, err
+	}
+	return exported.Profiles, nil
+}
+
+type importAction string
+
+const (
+	importActionImport  importAction = "import"
+	importActionSkip    importAction = "skip"
+	importActionReplace importAction = "replace"
+	importActionRename  importAction = "rename"
+)
+
+type profileImportPlanItem struct {
+	Action       importAction
+	OriginalName string
+	Profile      profile.Profile
+}
+
+func (item profileImportPlanItem) Description() string {
+	if item.Action == importActionRename {
+		return fmt.Sprintf("rename:%s", item.OriginalName)
+	}
+	return string(item.Action)
+}
+
+type profileImportSummary struct {
+	Imported int
+	Replaced int
+	Renamed  int
+	Skipped  int
+}
+
+func planProfileImport(s *store.Store, profiles []profile.Profile, policy conflictPolicy) ([]profileImportPlanItem, profileImportSummary, error) {
+	used := map[string]struct{}{}
+	for _, p := range s.List() {
+		used[p.Name] = struct{}{}
+	}
+	plan := make([]profileImportPlanItem, 0, len(profiles))
+	var summary profileImportSummary
+	for _, candidate := range profiles {
+		p, err := profile.Validate(candidate)
+		if err != nil {
+			return nil, summary, err
+		}
+		originalName := p.Name
+		_, exists := used[p.Name]
+		switch {
+		case !exists:
+			used[p.Name] = struct{}{}
+			plan = append(plan, profileImportPlanItem{Action: importActionImport, OriginalName: originalName, Profile: p})
+			summary.Imported++
+		case policy == conflictSkip:
+			plan = append(plan, profileImportPlanItem{Action: importActionSkip, OriginalName: originalName, Profile: p})
+			summary.Skipped++
+		case policy == conflictReplace:
+			used[p.Name] = struct{}{}
+			plan = append(plan, profileImportPlanItem{Action: importActionReplace, OriginalName: originalName, Profile: p})
+			summary.Replaced++
+		case policy == conflictRename:
+			p.Name = uniqueImportedName(originalName, used)
+			p, err = profile.Validate(p)
+			if err != nil {
+				return nil, summary, err
+			}
+			used[p.Name] = struct{}{}
+			plan = append(plan, profileImportPlanItem{Action: importActionRename, OriginalName: originalName, Profile: p})
+			summary.Imported++
+			summary.Renamed++
+		}
+	}
+	return plan, summary, nil
+}
+
+func uniqueImportedName(base string, used map[string]struct{}) string {
+	for i := 1; ; i++ {
+		candidate := fmt.Sprintf("%s-%d", base, i)
+		if _, exists := used[candidate]; !exists {
+			return candidate
+		}
+	}
+}
+
+func applyProfileImport(s *store.Store, plan []profileImportPlanItem) error {
+	for _, item := range plan {
+		switch item.Action {
+		case importActionSkip:
+			continue
+		case importActionImport, importActionRename:
+			if err := s.Add(item.Profile); err != nil {
+				return err
+			}
+		case importActionReplace:
+			if _, err := s.Get(item.Profile.Name); err != nil {
+				if errors.Is(err, store.ErrProfileNotFound) {
+					if addErr := s.Add(item.Profile); addErr != nil {
+						return addErr
+					}
+					continue
+				}
+				return err
+			}
+			if err := s.Update(item.Profile); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 func promptProfile(stdout io.Writer, stdin *os.File, base profile.Profile, requireName bool) (profile.Profile, error) {
@@ -842,12 +1053,17 @@ Commands:
   delete   Delete a profile
   connect  Connect to a profile
   pick     Search/select a profile by number
-  import   Import profiles from an SSH config file
+  import   Import profiles from OpenSSH config or sshdex JSON
   export   Export profiles to a JSON file
   backup   Write a backup copy of the profile store
   completion  Print shell completion script
   doctor   Show setup diagnostics
   version  Show version
+
+Import flags:
+  --format openssh|sshdex       Input format (default openssh)
+  --conflict skip|replace|rename  Conflict policy (default skip)
+  --dry-run                      Preview import plan without writing
 
 Global flags:
   --store PATH  Override profile store path`)

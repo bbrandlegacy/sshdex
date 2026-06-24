@@ -303,6 +303,193 @@ func TestCLIImportDryRunAndImportDoesNotModifySource(t *testing.T) {
 	}
 }
 
+func TestCLIImportSSHDexJSONRestoresExport(t *testing.T) {
+	dir := t.TempDir()
+	sourceStore := filepath.Join(dir, "source.json")
+	exportPath := filepath.Join(dir, "export.json")
+	restoredStore := filepath.Join(dir, "restored.json")
+
+	_, _, code := runCLI(t, sourceStore, "add", "--name", "prod", "--host", "prod.example.com", "--user", "deploy", "--tag", "prod")
+	if code != 0 {
+		t.Fatalf("seed add code=%d", code)
+	}
+	stdout, stderr, code := runCLI(t, sourceStore, "export", exportPath)
+	if code != 0 {
+		t.Fatalf("export code=%d stdout=%q stderr=%q", code, stdout, stderr)
+	}
+
+	stdout, stderr, code = runCLI(t, restoredStore, "import", "--format", "sshdex", exportPath)
+	if code != 0 {
+		t.Fatalf("json import code=%d stdout=%q stderr=%q", code, stdout, stderr)
+	}
+	if !strings.Contains(stdout, "imported 1 profile") {
+		t.Fatalf("json import stdout unexpected: %q", stdout)
+	}
+	stdout, stderr, code = runCLI(t, restoredStore, "show", "prod")
+	if code != 0 {
+		t.Fatalf("show restored code=%d stdout=%q stderr=%q", code, stdout, stderr)
+	}
+	for _, want := range []string{"Host: prod.example.com", "User: deploy", "Tags: prod"} {
+		if !strings.Contains(stdout, want) {
+			t.Fatalf("restored profile missing %q: %q", want, stdout)
+		}
+	}
+}
+
+func TestCLIImportSSHDexJSONDefaultSkipIsNonDestructiveAndDryRunDoesNotWrite(t *testing.T) {
+	dir := t.TempDir()
+	storePath := filepath.Join(dir, "profiles.json")
+	importPath := filepath.Join(dir, "import.json")
+	if err := os.WriteFile(importPath, []byte(`{"profiles":[{"name":"prod","host":"new.example.com","user":"new"},{"name":"stage","host":"stage.example.com","user":"ops"}]}`), 0o600); err != nil {
+		t.Fatalf("write import: %v", err)
+	}
+	_, _, code := runCLI(t, storePath, "add", "--name", "prod", "--host", "old.example.com", "--user", "old")
+	if code != 0 {
+		t.Fatalf("seed add code=%d", code)
+	}
+
+	stdout, stderr, code := runCLI(t, storePath, "import", importPath, "--format=sshdex", "--dry-run")
+	if code != 0 {
+		t.Fatalf("json dry-run code=%d stdout=%q stderr=%q", code, stdout, stderr)
+	}
+	if !strings.Contains(stdout, "prod\tnew.example.com\tnew\tskip") || !strings.Contains(stdout, "stage\tstage.example.com\tops\timport") {
+		t.Fatalf("dry-run plan unexpected: %q", stdout)
+	}
+	stdout, _, _ = runCLI(t, storePath, "list")
+	if strings.Contains(stdout, "stage") {
+		t.Fatalf("dry-run wrote stage profile: %q", stdout)
+	}
+
+	stdout, stderr, code = runCLI(t, storePath, "import", "--format", "sshdex", importPath)
+	if code != 0 {
+		t.Fatalf("json import skip code=%d stdout=%q stderr=%q", code, stdout, stderr)
+	}
+	if !strings.Contains(stdout, "imported 1 profile") || !strings.Contains(stdout, "skipped 1 duplicate") {
+		t.Fatalf("skip import stdout unexpected: %q", stdout)
+	}
+	stdout, _, _ = runCLI(t, storePath, "show", "prod")
+	if !strings.Contains(stdout, "Host: old.example.com") || strings.Contains(stdout, "new.example.com") {
+		t.Fatalf("default skip replaced existing profile: %q", stdout)
+	}
+	stdout, _, _ = runCLI(t, storePath, "show", "stage")
+	if !strings.Contains(stdout, "Host: stage.example.com") {
+		t.Fatalf("new profile not imported: %q", stdout)
+	}
+}
+
+func TestCLIImportSSHDexJSONConflictReplace(t *testing.T) {
+	dir := t.TempDir()
+	storePath := filepath.Join(dir, "profiles.json")
+	importPath := filepath.Join(dir, "replace.json")
+	if err := os.WriteFile(importPath, []byte(`{"profiles":[{"name":"prod","host":"new.example.com","user":"deploy","port":2200}]}`), 0o600); err != nil {
+		t.Fatalf("write import: %v", err)
+	}
+	_, _, code := runCLI(t, storePath, "add", "--name", "prod", "--host", "old.example.com", "--user", "old")
+	if code != 0 {
+		t.Fatalf("seed add code=%d", code)
+	}
+
+	stdout, stderr, code := runCLI(t, storePath, "import", "--format", "sshdex", "--conflict", "replace", importPath)
+	if code != 0 {
+		t.Fatalf("json import replace code=%d stdout=%q stderr=%q", code, stdout, stderr)
+	}
+	if !strings.Contains(stdout, "replaced 1") {
+		t.Fatalf("replace summary unexpected: %q", stdout)
+	}
+	stdout, _, _ = runCLI(t, storePath, "show", "prod")
+	for _, want := range []string{"Host: new.example.com", "User: deploy", "Port: 2200"} {
+		if !strings.Contains(stdout, want) {
+			t.Fatalf("replace missing %q: %q", want, stdout)
+		}
+	}
+}
+
+func TestCLIImportSSHDexJSONConflictRename(t *testing.T) {
+	dir := t.TempDir()
+	storePath := filepath.Join(dir, "profiles.json")
+	importPath := filepath.Join(dir, "rename.json")
+	if err := os.WriteFile(importPath, []byte(`{"profiles":[{"name":"prod","host":"new.example.com","user":"deploy"}]}`), 0o600); err != nil {
+		t.Fatalf("write import: %v", err)
+	}
+	for _, args := range [][]string{
+		{"add", "--name", "prod", "--host", "old.example.com"},
+		{"add", "--name", "prod-1", "--host", "existing.example.com"},
+	} {
+		if _, _, code := runCLI(t, storePath, args...); code != 0 {
+			t.Fatalf("seed %v code=%d", args, code)
+		}
+	}
+
+	stdout, stderr, code := runCLI(t, storePath, "import", "--format", "sshdex", "--conflict", "rename", "--dry-run", importPath)
+	if code != 0 {
+		t.Fatalf("json import rename dry-run code=%d stdout=%q stderr=%q", code, stdout, stderr)
+	}
+	if !strings.Contains(stdout, "prod-2	new.example.com	deploy	rename:prod") || !strings.Contains(stdout, "rename 1") {
+		t.Fatalf("rename dry-run unexpected: %q", stdout)
+	}
+	stdout, _, _ = runCLI(t, storePath, "list")
+	if strings.Contains(stdout, "prod-2") {
+		t.Fatalf("rename dry-run wrote profile: %q", stdout)
+	}
+
+	stdout, stderr, code = runCLI(t, storePath, "import", "--format", "sshdex", "--conflict=rename", importPath)
+	if code != 0 {
+		t.Fatalf("json import rename code=%d stdout=%q stderr=%q", code, stdout, stderr)
+	}
+	if !strings.Contains(stdout, "renamed 1") {
+		t.Fatalf("rename summary unexpected: %q", stdout)
+	}
+	stdout, _, _ = runCLI(t, storePath, "show", "prod-2")
+	if !strings.Contains(stdout, "Host: new.example.com") || !strings.Contains(stdout, "User: deploy") {
+		t.Fatalf("renamed profile missing: %q", stdout)
+	}
+	stdout, _, _ = runCLI(t, storePath, "show", "prod")
+	if !strings.Contains(stdout, "Host: old.example.com") {
+		t.Fatalf("rename modified original profile: %q", stdout)
+	}
+}
+
+func TestCLIImportSSHDexJSONRejectsInvalidFlagsAndData(t *testing.T) {
+	dir := t.TempDir()
+	storePath := filepath.Join(dir, "profiles.json")
+	badJSONPath := filepath.Join(dir, "bad.json")
+	invalidProfilePath := filepath.Join(dir, "invalid-profile.json")
+	if err := os.WriteFile(badJSONPath, []byte(`{"profiles":[`), 0o600); err != nil {
+		t.Fatalf("write malformed import: %v", err)
+	}
+	if err := os.WriteFile(invalidProfilePath, []byte(`{"profiles":[{"name":"bad","host":"example.com","notes":"SSHDX_TEST_SECRET_DO_NOT_PRINT_12345"}]}`), 0o600); err != nil {
+		t.Fatalf("write invalid profile import: %v", err)
+	}
+	cases := []struct {
+		name       string
+		args       []string
+		wantErr    string
+		forbidText string
+	}{
+		{name: "unsupported format", args: []string{"import", "--format", "yaml", badJSONPath}, wantErr: "unsupported import format yaml"},
+		{name: "unsupported conflict", args: []string{"import", "--format", "sshdex", "--conflict", "merge", badJSONPath}, wantErr: "unsupported conflict policy merge"},
+		{name: "missing format value", args: []string{"import", "--format"}, wantErr: "--format requires openssh or sshdex"},
+		{name: "missing conflict value", args: []string{"import", "--conflict"}, wantErr: "--conflict requires skip, replace, or rename"},
+		{name: "malformed json", args: []string{"import", "--format", "sshdex", badJSONPath}, wantErr: "unexpected end"},
+		{name: "invalid profile redacts", args: []string{"import", "--format", "sshdex", invalidProfilePath}, wantErr: "protected material", forbidText: "SSHDX_TEST_SECRET_DO_NOT_PRINT_12345"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			stdout, stderr, code := runCLI(t, storePath, tc.args...)
+			if code == 0 {
+				t.Fatalf("%s code=0 stdout=%q stderr=%q", tc.name, stdout, stderr)
+			}
+			combined := stdout + stderr
+			if !strings.Contains(combined, tc.wantErr) {
+				t.Fatalf("%s missing %q in stdout=%q stderr=%q", tc.name, tc.wantErr, stdout, stderr)
+			}
+			if tc.forbidText != "" && strings.Contains(combined, tc.forbidText) {
+				t.Fatalf("%s leaked forbidden text in stdout=%q stderr=%q", tc.name, stdout, stderr)
+			}
+		})
+	}
+}
+
 func TestCLIInteractiveImportPromptsForPath(t *testing.T) {
 	dir := t.TempDir()
 	storePath := dir + "/profiles.json"
