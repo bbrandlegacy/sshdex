@@ -153,6 +153,40 @@ func TestValidateAllowsOrdinaryCredentialWordsInProse(t *testing.T) {
 	}
 }
 
+func TestValidateAcceptsForwardSyntaxVariants(t *testing.T) {
+	p := Profile{
+		Name: "forwards",
+		Host: "example.com",
+		LocalForwards: []string{
+			"15432:db.internal:5432",
+			"127.0.0.1:15433:db.internal:5432",
+			":15434:db.internal:5432",
+			"/tmp/sshdex-local.sock:db.internal:5432",
+			"15435:/tmp/sshdex-remote.sock",
+		},
+		RemoteForwards: []string{
+			"18080:localhost:8080",
+			"0.0.0.0:18081:localhost:8080",
+			"0:localhost:8080",
+			"/tmp/sshdex-remote.sock:localhost:8080",
+			"18082:/tmp/sshdex-local.sock",
+		},
+		DynamicForwards: []string{
+			"1080",
+			"127.0.0.1:1081",
+			":1082",
+		},
+	}
+
+	got, err := Validate(p)
+	if err != nil {
+		t.Fatalf("Validate() unexpected error: %v", err)
+	}
+	if got.LocalForwards[0] != "15432:db.internal:5432" || got.DynamicForwards[0] != "1080" {
+		t.Fatalf("forward variants not preserved: %#v", got)
+	}
+}
+
 func TestValidateRejectsUnsafeForwardingValues(t *testing.T) {
 	cases := []Profile{
 		{Name: "local", Host: "example.com", LocalForwards: []string{"-oProxyCommand=pwn"}},
@@ -163,5 +197,34 @@ func TestValidateRejectsUnsafeForwardingValues(t *testing.T) {
 		if _, err := Validate(tc); err == nil {
 			t.Fatalf("Validate(%#v) nil error, want unsafe forwarding rejected", tc)
 		}
+	}
+}
+
+func TestValidateRejectsMalformedForwardSyntax(t *testing.T) {
+	cases := []struct {
+		name    string
+		profile Profile
+	}{
+		{name: "local missing host port", profile: Profile{Name: "bad", Host: "example.com", LocalForwards: []string{"15432:db.internal"}}},
+		{name: "local empty host", profile: Profile{Name: "bad", Host: "example.com", LocalForwards: []string{"127.0.0.1:15432::5432"}}},
+		{name: "local zero listen port", profile: Profile{Name: "bad", Host: "example.com", LocalForwards: []string{"127.0.0.1:0:db.internal:5432"}}},
+		{name: "local relative socket", profile: Profile{Name: "bad", Host: "example.com", LocalForwards: []string{"15432:relative.sock"}}},
+		{name: "local socket whitespace", profile: Profile{Name: "bad", Host: "example.com", LocalForwards: []string{"15432:/tmp/bad socket"}}},
+		{name: "local high host port", profile: Profile{Name: "bad", Host: "example.com", LocalForwards: []string{"127.0.0.1:15432:db.internal:65536"}}},
+		{name: "local nonnumeric listen port", profile: Profile{Name: "bad", Host: "example.com", LocalForwards: []string{"127.0.0.1:port:db.internal:5432"}}},
+		{name: "remote nonnumeric host port", profile: Profile{Name: "bad", Host: "example.com", RemoteForwards: []string{"18080:localhost:http"}}},
+		{name: "remote too many fields", profile: Profile{Name: "bad", Host: "example.com", RemoteForwards: []string{"127.0.0.1:18080:localhost:8080:extra"}}},
+		{name: "dynamic nonnumeric port", profile: Profile{Name: "bad", Host: "example.com", DynamicForwards: []string{"socks"}}},
+		{name: "dynamic zero port", profile: Profile{Name: "bad", Host: "example.com", DynamicForwards: []string{"127.0.0.1:0"}}},
+		{name: "dynamic missing port", profile: Profile{Name: "bad", Host: "example.com", DynamicForwards: []string{"127.0.0.1:"}}},
+		{name: "dynamic too many fields", profile: Profile{Name: "bad", Host: "example.com", DynamicForwards: []string{"127.0.0.1:1080:extra"}}},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, err := Validate(tc.profile); err == nil {
+				t.Fatalf("Validate(%#v) nil error, want malformed forward rejected", tc.profile)
+			}
+		})
 	}
 }

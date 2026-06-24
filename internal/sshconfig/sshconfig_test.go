@@ -68,3 +68,14 @@ Host prod prod-alias # production aliases
 		t.Fatalf("alias host should default to alias itself: %#v", profiles[1])
 	}
 }
+
+func TestParseConfigRejectsMalformedForwards(t *testing.T) {
+	input := `
+Host bad
+  HostName bad.example.com
+  LocalForward 127.0.0.1:port db.internal:5432
+`
+	if _, err := ParseString(input); err == nil {
+		t.Fatal("ParseString() nil error, want malformed forward rejected")
+	}
+}

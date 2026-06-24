@@ -241,6 +241,30 @@ func TestCLIForwardsAndRemoteCommandRoundTrip(t *testing.T) {
 	}
 }
 
+func TestCLIRejectsMalformedForwardBeforePersistence(t *testing.T) {
+	storePath := t.TempDir() + "/profiles.json"
+	stdout, stderr, code := runCLI(t, storePath,
+		"add",
+		"--name", "bad-tunnel",
+		"--host", "example.com",
+		"--local-forward", "127.0.0.1:port:db.internal:5432",
+	)
+	if code == 0 {
+		t.Fatalf("add malformed forward code=0 stdout=%q stderr=%q", stdout, stderr)
+	}
+	if !strings.Contains(stdout+stderr, "local_forward listen port") {
+		t.Fatalf("malformed forward error unexpected stdout=%q stderr=%q", stdout, stderr)
+	}
+
+	stdout, stderr, code = runCLI(t, storePath, "list")
+	if code != 0 {
+		t.Fatalf("list after rejected add code=%d stdout=%q stderr=%q", code, stdout, stderr)
+	}
+	if strings.Contains(stdout, "bad-tunnel") {
+		t.Fatalf("malformed forward profile was persisted: %q", stdout)
+	}
+}
+
 func TestCLIPickListsAndSelectsProfiles(t *testing.T) {
 	storePath := t.TempDir() + "/profiles.json"
 	for _, args := range [][]string{

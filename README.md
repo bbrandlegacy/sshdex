@@ -192,7 +192,7 @@ Supported imported directives in v0.1:
 - `DynamicForward`
 - `RemoteCommand`
 
-Wildcard host blocks like `Host *` are skipped.
+Wildcard host blocks like `Host *` are skipped. Forwarding values are validated before import or persistence: `LocalForward`/`RemoteForward` must use `[bind_address:]port:host:hostport`, `DynamicForward` must use `[bind_address:]port`, and all listen/target ports must be numeric values from 1 to 65535.
 
 ### Export / backup
 
