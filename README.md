@@ -2,15 +2,15 @@
 
 sshdex is a local-first SSH profile manager: an RDP-style command-line index for saving, browsing, editing, importing, and launching SSH targets without memorizing aliases or rebuilding `ssh` flags by hand.
 
-v0.1 is intentionally conservative. It stores SSH profile metadata and key file paths only. It does not store passwords, passphrases, or private key contents.
+sshdex stores SSH profile metadata and key file paths only. It does **not** store passwords, passphrases, or private key contents.
 
 ## Status
 
-v0.5 is in progress on the finish-line train. v0.4.0 is the current public release.
+sshdex v1.0.0 is ready for general CLI use as a conservative, local-first SSH profile manager.
 
 Implemented capabilities:
 
-- Go single-binary CLI skeleton.
+- Go single-binary CLI.
 - Validated SSH profile model.
 - Local JSON profile store.
 - Deterministic OpenSSH argv generation.
@@ -25,9 +25,62 @@ Implemented capabilities:
 - Export/backup profile JSON: `export [PATH]`, `backup [PATH]`.
 - Shell completions: `completion bash|zsh|fish`.
 
-## Install / build from source
+## Install
+
+### Prebuilt release binaries
+
+Download the archive for your OS/architecture from the GitHub Releases page:
+
+<https://github.com/bbrandlegacy/sshdex/releases>
+
+Each release includes Linux, macOS, and Windows builds plus `checksums.txt`.
+
+Verify a downloaded asset from the directory containing the archive and checksum file:
 
 ```bash
+sha256sum -c checksums.txt --ignore-missing
+```
+
+On macOS, if `sha256sum` is unavailable, filter the line for the asset you downloaded:
+
+```bash
+grep 'sshdex_1.0.0_darwin_arm64.tar.gz' checksums.txt | shasum -a 256 -c -
+```
+
+Replace the filename with the archive you downloaded.
+
+Then unpack the archive and place `sshdex` on your `PATH`, for example:
+
+```bash
+tar -xzf sshdex_1.0.0_linux_amd64.tar.gz
+install -m 0755 sshdex_1.0.0_linux_amd64/sshdex ~/.local/bin/sshdex
+sshdex version
+```
+
+Windows releases are `.zip` archives containing `sshdex.exe`.
+
+### `go install`
+
+With Go 1.22 or newer:
+
+```bash
+go install github.com/bbrandlegacy/sshdex/cmd/sshdex@v1.0.0
+sshdex version
+```
+
+For the latest development state on the default branch:
+
+```bash
+go install github.com/bbrandlegacy/sshdex/cmd/sshdex@main
+```
+
+Make sure Go's binary directory is on your `PATH` (usually `$(go env GOPATH)/bin` or `~/go/bin`).
+
+### Build from source
+
+```bash
+git clone https://github.com/bbrandlegacy/sshdex.git
+cd sshdex
 go build -o sshdex ./cmd/sshdex
 ./sshdex version
 ```
@@ -39,6 +92,21 @@ STORE=/tmp/sshdex-demo/profiles.json
 mkdir -p /tmp/sshdex-demo
 go build -o /tmp/sshdex-demo/sshdex ./cmd/sshdex
 /tmp/sshdex-demo/sshdex --store "$STORE" doctor
+```
+
+## Quick start
+
+```bash
+sshdex add --name prod-web-01 --host 203.0.113.10 --user deploy --tag prod --tag web
+sshdex list
+sshdex prod-web-01 --dry-run
+sshdex prod-web-01
+```
+
+Use `--store PATH` with any command to isolate tests, demos, or scripts from your default profile store:
+
+```bash
+sshdex --store /tmp/sshdex/profiles.json list
 ```
 
 ## Commands
@@ -188,7 +256,7 @@ sshdex import --format sshdex --conflict rename ./sshdex-profiles.json   # impor
 
 `--dry-run` prints the planned action for each profile and does not write the store.
 
-Supported imported directives in v0.1:
+Supported imported directives:
 
 - `Host`
 - `HostName`
@@ -221,9 +289,30 @@ Export and backup write the same secret-free profile JSON format used by the loc
 
 ### Shell completions
 
+Generate a completion script for your shell:
+
 ```bash
+sshdex completion bash
+sshdex completion zsh
+sshdex completion fish
+```
+
+Common install locations:
+
+```bash
+# bash
+mkdir -p ~/.local/share/bash-completion/completions
 sshdex completion bash > ~/.local/share/bash-completion/completions/sshdex
+
+# zsh
+mkdir -p ~/.zfunc
 sshdex completion zsh > ~/.zfunc/_sshdex
+# Add this to ~/.zshrc if ~/.zfunc is not already in fpath:
+# fpath=(~/.zfunc $fpath)
+# autoload -Uz compinit && compinit
+
+# fish
+mkdir -p ~/.config/fish/completions
 sshdex completion fish > ~/.config/fish/completions/sshdex.fish
 ```
 
@@ -235,33 +324,26 @@ sshdex doctor
 
 Reports profile store path, profile count, whether `ssh` is available, and obvious invalid profile references such as missing identity files.
 
-### Test-only store override
-
-All commands accept a global store override:
-
-```bash
-sshdex --store /tmp/sshdex/profiles.json list
-```
-
 ## Security posture
 
-sshdex v0.1 follows a conservative local-first security posture:
+sshdex v1.0 follows a conservative local-first security posture:
 
 - Does not store passwords.
 - Does not store passphrases.
 - Does not copy private key contents into the profile store.
-- Stores only metadata and key file paths.
+- Stores only host/user/port metadata, SSH option metadata, tags, notes, and key file paths.
 - Uses argv execution for OpenSSH rather than shell command strings.
 - Provides dry-run previews that quote shell-special arguments for readability.
 - Supports OpenSSH local, remote, and dynamic forwarding arguments as argv, not shell strings.
 - Supports optional remote command metadata appended after the SSH target.
 - Does not mutate `~/.ssh/config` during import.
+- Redacts protected-looking values in CLI output/errors.
 
-The research/architecture work behind this release treats SSH key management as a high-value security boundary. Password vaults, encrypted sync, team sharing, and MCP/AI agent access are deliberately deferred until separate threat modeling and tests exist.
+The research/architecture work behind this release treats SSH key management as a high-value security boundary. Password vaults, encrypted sync, team sharing, and MCP/AI agent access remain deliberately deferred until separate threat modeling and tests exist.
 
-## v0.1 limits / deferred features
+## v1.0 scope / deferred features
 
-Deferred beyond v0.1:
+Deferred beyond v1.0:
 
 - Password storage.
 - age-encrypted credential vault.
@@ -269,10 +351,10 @@ Deferred beyond v0.1:
 - Git-backed sync.
 - MCP server.
 - 1Password/Bitwarden integration.
-- Rich TUI profile picker.
+- Rich full-screen TUI profile picker.
 - Visual jump-host/tunnel builder.
 - Terminal init command automation.
-- Production Windows installer.
+- Native OS package installers.
 
 ## Development validation
 
@@ -299,3 +381,14 @@ $BIN --store "$STORE" list --search demo
 $BIN --store "$STORE" demo --dry-run
 $BIN --store "$STORE" doctor
 ```
+
+## Release process
+
+Releases are cut from tags named `vX.Y.Z`.
+
+1. Update `internal/app.Version`, README install examples, and relevant tests.
+2. Run the development validation ladder.
+3. Tag the release, for example `git tag v1.0.0`.
+4. Push the tag. The release workflow builds Linux/macOS/Windows archives and uploads `checksums.txt` to the GitHub Release.
+
+Do not create release artifacts from an unverified working tree.

@@ -11,7 +11,7 @@ import (
 	"github.com/bbrandlegacy/sshdex/internal/security"
 )
 
-// Profile describes a saved SSH target. v0.1 stores metadata only: no
+// Profile describes a saved SSH target. sshdex stores metadata only: no
 // passwords, passphrases, or private key contents belong in this struct.
 type Profile struct {
 	Name            string     `json:"name"`

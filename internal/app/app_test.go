@@ -642,7 +642,18 @@ func TestCLICompletionPrintsShellScripts(t *testing.T) {
 	}
 }
 
-func TestHelpMentionsV01Commands(t *testing.T) {
+func TestCLIVersionPrintsReleaseVersion(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	code := Run([]string{"version"}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("version code=%d stderr=%q", code, stderr.String())
+	}
+	if got, want := strings.TrimSpace(stdout.String()), "sshdex 1.0.0"; got != want {
+		t.Fatalf("version output=%q want %q", got, want)
+	}
+}
+
+func TestHelpMentionsV1Commands(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	code := Run([]string{"help"}, &stdout, &stderr)
 	if code != 0 {
